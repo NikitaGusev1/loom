@@ -25,8 +25,10 @@ const MODEL_MAP: Record<string, string> = {
   haiku: 'claude-haiku-4-5-20251001',
 };
 
+const CODEX_DEFAULT_MODEL = 'account-default';
 const CODEX_MODEL_MAP: Record<string, string> = {
-  codex: 'gpt-5-codex',
+  codex: CODEX_DEFAULT_MODEL,
+  default: CODEX_DEFAULT_MODEL,
   gpt5: 'gpt-5',
   mini: 'gpt-5-mini',
 };
@@ -100,7 +102,7 @@ if (!dagPath) {
     [
       'Usage: dag-executor <decomposition.json>',
       '  [--resume] [--dry-run] [--slots] [--decomposition-stats]',
-      '  [--provider=codex|claude] [--model=codex|gpt5|mini|opus|sonnet|haiku|<model>]',
+      '  [--provider=codex|claude] [--model=codex|default|gpt5|mini|opus|sonnet|haiku|<model>]',
       '  [--rerun=id1,id2]',
       '  [--force-worktree-reset=id1,id2] [--allow-stale-self-host]',
       '  [--test-cmd=<cmd>] [--lint-cmd=<cmd>] [--typecheck-cmd=<cmd>] [--no-verify]',
@@ -129,7 +131,7 @@ const resolveModels = (
 ): { defaultModel: string; heavyModel: string } => {
   if (!arg) {
     return selectedProvider === 'codex'
-      ? { defaultModel: 'gpt-5-codex', heavyModel: 'gpt-5-codex' }
+      ? { defaultModel: CODEX_DEFAULT_MODEL, heavyModel: CODEX_DEFAULT_MODEL }
       : { defaultModel: 'claude-sonnet-4-6', heavyModel: 'claude-opus-4-8' };
   }
   const map = selectedProvider === 'codex' ? CODEX_MODEL_MAP : MODEL_MAP;

@@ -100,15 +100,13 @@ export const runCodexCli = async (
   options: CodexStreamOptions,
 ): Promise<{ usage?: TaskUsage; trace: SessionTrace }> => {
   const bin = process.env.CODEX_BIN ?? 'codex';
+  const modelArgs = options.model && options.model !== 'account-default' ? ['--model', options.model] : [];
   const args = [
     'exec',
     '--json',
-    '--model',
-    options.model,
+    ...modelArgs,
     '--sandbox',
     'workspace-write',
-    '--ask-for-approval',
-    'never',
     '--skip-git-repo-check',
     ...(options.cwd ? ['--cd', options.cwd] : []),
     '-',
