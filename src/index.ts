@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { ZodError } from 'zod';
 import { validateDAG } from './validation.js';
 import { executeDAG } from './executor.js';
+import { executeBacklog } from './backlog-executor.js';
 import { createLogger } from './logger.js';
 import { toErrorMessage } from './exec.js';
 import { WEIGHT_MAX_TURNS } from './types.js';
@@ -37,6 +38,7 @@ const args = process.argv.slice(2);
 const dagPath = args.find((a) => !a.startsWith('--'));
 const resume = args.includes('--resume');
 const dryRun = args.includes('--dry-run');
+const backlog = args.includes('--backlog');
 const slotsFlag = args.includes('--slots');
 const statsFlag = args.includes('--decomposition-stats');
 const allowStaleSelfHost = args.includes('--allow-stale-self-host');
@@ -101,7 +103,7 @@ if (!dagPath) {
   log.error(
     [
       'Usage: dag-executor <decomposition.json>',
-      '  [--resume] [--dry-run] [--slots] [--decomposition-stats]',
+      '  [--resume] [--dry-run] [--backlog] [--slots] [--decomposition-stats]',
       '  [--provider=codex|claude] [--model=codex|default|gpt5|mini|opus|sonnet|haiku|<model>]',
       '  [--rerun=id1,id2]',
       '  [--force-worktree-reset=id1,id2] [--allow-stale-self-host]',
@@ -143,6 +145,7 @@ const { defaultModel, heavyModel } = resolveModels(modelArg, provider);
 
 const config: ExecutorConfig = {
   provider,
+  executionMode: backlog ? 'backlog' : 'layered',
   defaultModel,
   heavyModel,
   maxTurns: 80,
@@ -234,6 +237,7 @@ if (dryRun) {
 
   log.info('');
   log.info(`Provider: ${provider}`);
+  log.info(`Mode: ${backlog ? 'backlog' : 'layered'}`);
   log.info(`Models: default=${defaultModel}, heavy=${heavyModel}`);
   log.info(`Cost estimate: $${totalEstMin.toFixed(2)} typical — $${totalEstMax.toFixed(2)} max`);
   log.info('(Based on avg 8K input + 2K output per turn, 40% turn utilization)');
@@ -276,7 +280,9 @@ process.on('SIGINT', () => {
 
 let finalState: ExecutionState;
 try {
-  finalState = await executeDAG({ dag, config, signal: abortController.signal, resume, rerunTaskIds });
+  finalState = backlog
+    ? await executeBacklog({ dag, config, signal: abortController.signal, resume, rerunTaskIds })
+    : await executeDAG({ dag, config, signal: abortController.signal, resume, rerunTaskIds });
 } catch (err) {
   log.error(`Unexpected error: ${toErrorMessage(err)}`);
   process.exit(1);

@@ -151,6 +151,7 @@ export interface ExecutionState {
 
 export interface ExecutorConfig {
   provider: 'codex' | 'claude';
+  executionMode?: 'layered' | 'backlog';
   defaultModel: string;
   heavyModel: string;
   maxTurns: number;

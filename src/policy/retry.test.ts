@@ -154,6 +154,20 @@ describe('AC-4: transient failure', () => {
   });
 });
 
+describe('quota / usage-limit failure', () => {
+  it('daily usage limit → quota pause decision', () => {
+    const events: DagEvent[] = [failed('t1', 'You reached your daily usage limit. Try again tomorrow.')];
+    const d = decide(events, 't1');
+    assert.equal(d.kind, 'quota');
+  });
+
+  it('quota errors win over transient retry wording', () => {
+    const events: DagEvent[] = [failed('t1', 'rate limit: monthly quota exceeded; try again after reset')];
+    const d = decide(events, 't1');
+    assert.equal(d.kind, 'quota');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // AC-5: non-transient task.failed → permanent non-transient
 // ---------------------------------------------------------------------------

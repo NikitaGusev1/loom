@@ -29,13 +29,13 @@ Verify from any directory:
 dag-executor --slots
 ```
 
-> **nvm/volta caveat**: `npm link` installs into the *active* node version's global prefix. If you switch node versions, the `dag-executor` command disappears — re-run `npm link` from this repo under the new version.
+> **nvm/volta caveat**: `npm link` installs into the _active_ node version's global prefix. If you switch node versions, the `dag-executor` command disappears — re-run `npm link` from this repo under the new version.
 
 After pulling changes: `npm run build` (the linked binary points at `build/index.js`, so a rebuild is all that's needed — no re-link).
 
 ### 2. Claude Code plugin
 
-Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/decompose`, `/implement-dag`, the review skills `/code-review` / `/triage-review`, the `plan-reviewer` / `code-reviewer` / `review-triager` / `task-decomposer` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
+Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/decompose`, `/implement-dag`, the review skills `/code-review` / `/triage-review`, the `plan-reviewer` / `code-reviewer` / `review-triager` / `task-decomposer` / `code-simplifier` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
 
 `/auto-implement` defaults to the **supervised** flow (backgrounds the supervisor, one fresh context per phase, chat just monitors gates); pass `--inline` for the monolithic in-session engine — the only substrate that runs sequential (`/implement-plan`) plans.
 
@@ -137,25 +137,25 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 
 ### Layer-level
 
-| Kind                            | When emitted                                              | Payload fields                                             | Consumer                              |
-| ------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------- |
-| `layer.started`                 | Executor begins dispatching a layer                       | `dagId`, `layer`, `taskIds`                                | Reducer, human                        |
-| `layer.completed`               | All tasks in layer succeeded                              | `dagId`, `layer`, `taskIds`, `durationMs`                  | Reducer                               |
-| `layer.completed-with-failures` | Layer done but ≥1 task failed permanently (others passed) | `dagId`, `layer`, `taskIds`, `failedTaskIds`, `durationMs` | Reducer, human (partial-layer result) |
-| `layer.failed`                  | All tasks in layer failed permanently                     | `dagId`, `layer`, `taskIds`, `failedTaskIds`, `reason`     | Reducer (triggers `dag.paused`)       |
+| Kind                            | When emitted                                                          | Payload fields                                                          | Consumer                                       |
+| ------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
+| `layer.started`                 | Executor begins dispatching a layer                                   | `dagId`, `layer`, `taskIds`                                             | Reducer, human                                 |
+| `layer.completed`               | All tasks in layer succeeded                                          | `dagId`, `layer`, `taskIds`, `durationMs`                               | Reducer                                        |
+| `layer.completed-with-failures` | Layer done but ≥1 task failed permanently (others passed)             | `dagId`, `layer`, `taskIds`, `failedTaskIds`, `durationMs`              | Reducer, human (partial-layer result)          |
+| `layer.failed`                  | All tasks in layer failed permanently                                 | `dagId`, `layer`, `taskIds`, `failedTaskIds`, `reason`                  | Reducer (triggers `dag.paused`)                |
 | `layer.verification-failed`     | Merged-whole (Tier-2) verification failed on this layer's merged main | `dagId`, `layer`, `taskIds`, `verificationKind`, `reason`, `durationMs` | Reducer (informational; triggers `dag.paused`) |
 
 ### Task-level
 
-| Kind             | When emitted                                         | Payload fields                                                                                             | Consumer                                     |
-| ---------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `task.started`   | Executor begins running a task                       | `dagId`, `taskId`, `taskName`, `layer`, `worktreePath?`, `worktreeBranch?`                                 | Reducer (marks task in-progress)             |
-| `task.completed` | Task finished successfully                           | `dagId`, `taskId`, `taskName`, `layer`, `durationMs`, `usage`, `filesModified`, `truncated?`, `finalState` | Reducer, retry policy (→ `succeeded`)        |
-| `task.failed`    | Task threw a non-timeout error                       | `dagId`, `taskId`, `taskName`, `layer`, `error`, `durationMs`, `usage?`, `finalState`                      | Reducer, retry policy (→ retry or permanent) |
-| `task.timeout`   | Task exceeded its weight-derived wall-clock deadline | `dagId`, `taskId`, `taskName`, `layer`, `timeoutMs`, `durationMs`, `usage?`, `finalState`                  | Reducer, retry policy (progressive backoff)  |
-| `task.verification-failed` | Task's changes failed Tier-1 verification after the fix budget was spent | `dagId`, `taskId`, `taskName`, `layer`, `verificationKind`, `error`, `durationMs`, `usage?`, `finalState` | Reducer, retry policy (→ permanent; worktree not merged) |
-| `task.retry`     | Retry policy decided to re-run the task              | `dagId`, `taskId`, `taskName`, `layer`, `attempt`, `delayMs?`, `reason`, `previousError?`                  | Reducer (resets task for next run)           |
-| `task.reset`     | `--rerun=<id>` was requested for this task           | `dagId`, `taskId`, `taskName`, `layer`, `previousStatus`, `reason`                                         | Reducer (clears task state; policy restarts) |
+| Kind                       | When emitted                                                             | Payload fields                                                                                             | Consumer                                                 |
+| -------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `task.started`             | Executor begins running a task                                           | `dagId`, `taskId`, `taskName`, `layer`, `worktreePath?`, `worktreeBranch?`                                 | Reducer (marks task in-progress)                         |
+| `task.completed`           | Task finished successfully                                               | `dagId`, `taskId`, `taskName`, `layer`, `durationMs`, `usage`, `filesModified`, `truncated?`, `finalState` | Reducer, retry policy (→ `succeeded`)                    |
+| `task.failed`              | Task threw a non-timeout error                                           | `dagId`, `taskId`, `taskName`, `layer`, `error`, `durationMs`, `usage?`, `finalState`                      | Reducer, retry policy (→ retry or permanent)             |
+| `task.timeout`             | Task exceeded its weight-derived wall-clock deadline                     | `dagId`, `taskId`, `taskName`, `layer`, `timeoutMs`, `durationMs`, `usage?`, `finalState`                  | Reducer, retry policy (progressive backoff)              |
+| `task.verification-failed` | Task's changes failed Tier-1 verification after the fix budget was spent | `dagId`, `taskId`, `taskName`, `layer`, `verificationKind`, `error`, `durationMs`, `usage?`, `finalState`  | Reducer, retry policy (→ permanent; worktree not merged) |
+| `task.retry`               | Retry policy decided to re-run the task                                  | `dagId`, `taskId`, `taskName`, `layer`, `attempt`, `delayMs?`, `reason`, `previousError?`                  | Reducer (resets task for next run)                       |
+| `task.reset`               | `--rerun=<id>` was requested for this task                               | `dagId`, `taskId`, `taskName`, `layer`, `previousStatus`, `reason`                                         | Reducer (clears task state; policy restarts)             |
 
 > **Note on `task.completed`.`filesModified`**: capped at 20 entries (`FILES_MODIFIED_CAP`). When the actual list is longer, `truncated: true` is set and the full list is available in `.state.json`.
 
@@ -163,11 +163,11 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 
 ### Worktree-level
 
-| Kind                   | When emitted                                               | Payload fields                                                              | Consumer                              |
-| ---------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------- |
-| `worktree.created`     | `git worktree add` succeeded for a task                    | `dagId`, `taskId`, `worktreePath`, `branch`, `baseBranch`                   | Reducer (records worktree active)     |
-| `worktree.merged`      | Task branch merged back into base branch                   | `dagId`, `taskId`, `worktreePath`, `branch`, `targetBranch`, `filesChanged` | Reducer, human (audit trail)          |
-| `worktree.removed`     | `git worktree remove` + `git branch -D` completed          | `dagId`, `taskId`, `worktreePath`, `branch`, `reason`                       | Reducer (clears worktree record)      |
+| Kind               | When emitted                                      | Payload fields                                                              | Consumer                          |
+| ------------------ | ------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------- |
+| `worktree.created` | `git worktree add` succeeded for a task           | `dagId`, `taskId`, `worktreePath`, `branch`, `baseBranch`                   | Reducer (records worktree active) |
+| `worktree.merged`  | Task branch merged back into base branch          | `dagId`, `taskId`, `worktreePath`, `branch`, `targetBranch`, `filesChanged` | Reducer, human (audit trail)      |
+| `worktree.removed` | `git worktree remove` + `git branch -D` completed | `dagId`, `taskId`, `worktreePath`, `branch`, `reason`                       | Reducer (clears worktree record)  |
 
 `worktree.removed.reason` values:
 
@@ -290,22 +290,35 @@ Stale worktrees from a previous run are force-removed before creating a new one 
 dag-executor <decomposition.json> [flags]
 ```
 
-| Flag                             | Default | Description                                                                 |
-| -------------------------------- | ------- | --------------------------------------------------------------------------- |
-| `--resume`                       | false   | Resume a paused run from the event log                                      |
-| `--dry-run`                      | false   | Print estimated task costs and exit without executing                       |
-| `--slots`                        | false   | Print machine-wide slot snapshot and exit (no DAG argument needed)          |
-| `--model=opus\|sonnet\|haiku`    | sonnet  | Model for standard/trivial tasks; `opus` is used for heavy tasks by default |
-| `--rerun=id1,id2`                | —       | Re-execute specific tasks (emits `task.reset` before re-running)            |
-| `--force-worktree-reset=id1,id2` | —       | Allow clobbering unmerged branches for the listed task IDs                  |
-| `--test-cmd=<cmd>`               | detected | Override the verification test command (else auto-detected from `package.json`) |
-| `--lint-cmd=<cmd>`               | detected | Override the verification lint command                                      |
-| `--typecheck-cmd=<cmd>`          | detected | Override the verification typecheck command                                 |
-| `--no-verify`                    | false   | Disable both verification tiers entirely                                    |
+| Flag                             | Default  | Description                                                                                      |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `--resume`                       | false    | Resume a paused run from the event log                                                           |
+| `--dry-run`                      | false    | Print estimated task costs and exit without executing                                            |
+| `--backlog`                      | false    | Run dependency-ready tasks from the DAG as a persistent backlog instead of strict layer barriers |
+| `--slots`                        | false    | Print machine-wide slot snapshot and exit (no DAG argument needed)                               |
+| `--model=opus\|sonnet\|haiku`    | sonnet   | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
+| `--rerun=id1,id2`                | —        | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
+| `--force-worktree-reset=id1,id2` | —        | Allow clobbering unmerged branches for the listed task IDs                                       |
+| `--test-cmd=<cmd>`               | detected | Override the verification test command (else auto-detected from `package.json`)                  |
+| `--lint-cmd=<cmd>`               | detected | Override the verification lint command                                                           |
+| `--typecheck-cmd=<cmd>`          | detected | Override the verification typecheck command                                                      |
+| `--no-verify`                    | false    | Disable both verification tiers entirely                                                         |
 
 ### Verification gates
 
 After a task's session, the executor runs the target repo's **detected** test / lint / typecheck commands against the changes (Tier 1, per-task, before commit — re-invoking the session up to twice with the failures), and again on merged main after each layer (Tier 2, pause-on-fail). Commands are detected from the package manager + `package.json` scripts — **never defaulted to yarn**. A check that can't be detected (and has no override) is **skipped with a warning**, never a false failure; a fresh worktree without `node_modules` likewise skips JS checks, so Tier 2 on merged main is the real backstop. Override a command with `--test-cmd`/`--lint-cmd`/`--typecheck-cmd` (raw, whitespace-split, run as-is), or turn the whole thing off with `--no-verify`. Formatters are deliberately not in the gate set. Verification failures are a distinct, permanent event (`task.verification-failed` / `layer.verification-failed`) — never transient-retried.
+
+### Backlog mode
+
+`--backlog` uses the same DAG file and event log, but treats the DAG as a persistent task backlog. On each loop it finds tasks whose dependencies are completed, runs the ready set in worktrees, merges successful work, runs merged-main verification, and repeats until the backlog is complete or blocked.
+
+Resume is still event-log based:
+
+```sh
+dag-executor <dagPath> --backlog --resume
+```
+
+Quota / usage-limit errors pause the run instead of retrying in a tight loop. After the account limit resets, run the same command with `--resume`; completed and merged tasks are skipped, and the quota-blocked task is attempted again.
 
 ### Model aliases
 

@@ -383,6 +383,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
       const succeededTaskIds = new Set<string>();
       const permanentFailedIds = new Set<string>();
       const retryAttempts = new Map<string, number>();
+      let quotaPauseReason: string | undefined;
       let activeTasks = [...nonTrivialTasks];
       let completedInLayer = 0;
       const layerTotal = nonTrivialTasks.length;
@@ -497,6 +498,10 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
             });
             nextRetryTasks.push({ task, delayMs: decision.delayMs });
             log.warn(`Task ${taskId} will retry (attempt ${attempt}) after ${decision.delayMs}ms`);
+          } else if (decision.kind === 'quota') {
+            quotaPauseReason = `Quota limit reached while running ${taskId}: ${decision.reason}`;
+            permanentFailedIds.add(taskId);
+            log.warn(quotaPauseReason);
           } else if (decision.kind === 'permanent') {
             permanentFailedIds.add(taskId);
             log.error(`Task ${taskId} permanently failed (${decision.reason})`);
@@ -533,6 +538,11 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
 
       const hasAnyPermanentFailure = permanentFailedIds.size > 0;
       const hasAnySuccess = succeededTaskIds.size > 0;
+
+      if (quotaPauseReason && !hasAnySuccess) {
+        log.warn(`${quotaPauseReason}. State saved. Resume with --resume after the limit resets.`);
+        return pauseDag(quotaPauseReason, layer.layer);
+      }
 
       if (hasAnyPermanentFailure && !hasAnySuccess) {
         // All tasks permanently failed — emit layer.failed and pause
@@ -607,6 +617,11 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
         // not the pre-merge sha. External movement is still detected.
         const { stdout: postMergeHead } = await exec('git', ['rev-parse', 'HEAD']);
         baseCommitSha = postMergeHead.trim();
+      }
+
+      if (quotaPauseReason) {
+        log.warn(`${quotaPauseReason}. Merged completed work; resume with --resume after the limit resets.`);
+        return pauseDag(quotaPauseReason, layer.layer);
       }
     }
 
