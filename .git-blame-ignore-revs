@@ -1,0 +1,6 @@
+# Mechanical commits to skip in git blame.
+# Activate locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub's blame view picks this file up automatically.)
+
+# style: one-time prettier reformat of src/
+9c8270749d0b980fb1a985619616b07af1794b18

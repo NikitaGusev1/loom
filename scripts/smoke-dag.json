@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "id": "smoke-dag",
+    "source": {
+      "type": "description",
+      "title": "Executor smoke test",
+      "description": "Minimal 3-task / 2-layer DAG that exercises the full executor path end-to-end: a batched trivial layer, a standard worktree task, the inter-layer contract gate, and worktree merge. All work is scoped to smoke-out/ so a run is trivially disposable. Cheap (sonnet, tiny tasks).",
+      "figmaUrls": [],
+      "acceptanceCriteria": [
+        "smoke-out/alpha.txt exists and contains the single line: alpha",
+        "smoke-out/bravo.txt exists and contains the single line: bravo",
+        "smoke-out/combined.md lists the contents of both source files"
+      ]
+    },
+    "createdAt": "2026-06-08T00:00:00Z",
+    "gitCommit": "0000000",
+    "branch": "main",
+    "qualityReport": {
+      "iterations": 1,
+      "checksRun": ["hand-authored"],
+      "allPassed": true
+    }
+  },
+  "tasks": [
+    {
+      "id": "task-alpha",
+      "name": "Write alpha file",
+      "description": "Create the file smoke-out/alpha.txt containing exactly one line with the text: alpha (no trailing blank lines, no other content). Use the Write tool. Do not modify any other file.",
+      "dependencies": [],
+      "contracts": {
+        "inputs": {},
+        "outputs": {
+          "alpha": {
+            "kind": "file",
+            "path": "smoke-out/alpha.txt",
+            "mediaType": "text",
+            "description": "A text file whose sole line is the word alpha"
+          }
+        }
+      },
+      "context": {
+        "files": ["smoke-out/alpha.txt"],
+        "conventions": []
+      },
+      "completionCriteria": {
+        "automated": ["test -f smoke-out/alpha.txt"],
+        "manual": []
+      },
+      "estimatedScope": "single-component",
+      "weight": "trivial"
+    },
+    {
+      "id": "task-bravo",
+      "name": "Write bravo file",
+      "description": "Create the file smoke-out/bravo.txt containing exactly one line with the text: bravo (no trailing blank lines, no other content). Use the Write tool. Do not modify any other file.",
+      "dependencies": [],
+      "contracts": {
+        "inputs": {},
+        "outputs": {
+          "bravo": {
+            "kind": "file",
+            "path": "smoke-out/bravo.txt",
+            "mediaType": "text",
+            "description": "A text file whose sole line is the word bravo"
+          }
+        }
+      },
+      "context": {
+        "files": ["smoke-out/bravo.txt"],
+        "conventions": []
+      },
+      "completionCriteria": {
+        "automated": ["test -f smoke-out/bravo.txt"],
+        "manual": []
+      },
+      "estimatedScope": "single-component",
+      "weight": "trivial"
+    },
+    {
+      "id": "task-combine",
+      "name": "Combine source files",
+      "description": "Read smoke-out/alpha.txt and smoke-out/bravo.txt, then create smoke-out/combined.md containing a markdown bullet list with one bullet per source file in the form `- <filename>: <contents>`. Use the Read and Write tools. Do not modify the two source files.",
+      "dependencies": ["task-alpha", "task-bravo"],
+      "contracts": {
+        "inputs": {
+          "alpha": { "type": "file", "source": "task-alpha" },
+          "bravo": { "type": "file", "source": "task-bravo" }
+        },
+        "outputs": {
+          "combined": {
+            "kind": "file",
+            "path": "smoke-out/combined.md",
+            "mediaType": "markdown",
+            "description": "A markdown file listing the contents of alpha.txt and bravo.txt"
+          }
+        }
+      },
+      "context": {
+        "files": ["smoke-out/alpha.txt", "smoke-out/bravo.txt", "smoke-out/combined.md"],
+        "conventions": []
+      },
+      "completionCriteria": {
+        "automated": ["test -f smoke-out/combined.md"],
+        "manual": []
+      },
+      "estimatedScope": "single-component",
+      "weight": "standard"
+    }
+  ],
+  "executionLayers": [
+    {
+      "layer": 0,
+      "description": "Create the two source files (batched trivial session on the base branch)",
+      "taskIds": ["task-alpha", "task-bravo"]
+    },
+    {
+      "layer": 1,
+      "description": "Combine the source files (standard task in an isolated worktree, merged back)",
+      "taskIds": ["task-combine"]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# dag-auto-run-supervisor — PATH-visible wrapper for the headless /auto-run
+# supervisor loop.
+#
+# Shipped in the dag-executor Claude Code plugin's bin/ directory, which the
+# Bash tool adds to PATH while the plugin is enabled. /auto-run resolves this
+# wrapper via `command -v` and nohup-launches it; the wrapper execs the real
+# supervisor, which resolves its own siblings (checkpoint helper) via
+# SCRIPT_DIR, so behavior is identical to invoking the script directly.
+set -euo pipefail
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "${PLUGIN_ROOT}/scripts/auto-run-supervisor.sh" "$@"

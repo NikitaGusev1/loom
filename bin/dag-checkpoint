@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# dag-checkpoint — PATH-visible wrapper for the auto-run checkpoint helper.
+#
+# Shipped in the dag-executor Claude Code plugin's bin/ directory, which the
+# Bash tool adds to PATH while the plugin is enabled. Lets commands and
+# reference docs invoke the helper without knowing the plugin install path.
+#
+# Usage mirrors scripts/auto-run-checkpoint.cjs exactly:
+#   dag-checkpoint get   <path> <field>
+#   dag-checkpoint set   <path> <field> <value>
+#   dag-checkpoint merge <path> <jsonObject>
+#   dag-checkpoint init  <path> <jsonObject>
+#   dag-checkpoint dump  <path>
+set -euo pipefail
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec node "${PLUGIN_ROOT}/scripts/auto-run-checkpoint.cjs" "$@"

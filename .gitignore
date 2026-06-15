@@ -1,0 +1,6 @@
+node_modules/
+build/
+
+# AI working artifacts — generated, local-only (plans, specs, decompositions,
+# reviews, figma diffs, event/state JSON, supervisor run logs)
+.claude/ai/

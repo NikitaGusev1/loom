@@ -1,0 +1,17 @@
+{
+  "name": "visma-manager",
+  "description": "Internal Visma Manager tooling plugins for Claude Code",
+  "owner": {
+    "name": "Nikita Gusev",
+    "email": "nikita.gusev@visma.com"
+  },
+  "plugins": [
+    {
+      "name": "dag-executor",
+      "source": "./",
+      "description": "DAG-based parallel plan implementation: /auto-implement, /auto-run, /auto-step, /decompose, /implement-dag, /implement-plan, /explore, /plan-from-spec, /code-review, /triage-review skills + plan-reviewer/code-reviewer/review-triager/task-decomposer agents. Requires the dag-executor CLI (npm link from this repo).",
+      "category": "workflow",
+      "tags": ["orchestration", "dag", "planning"]
+    }
+  ]
+}

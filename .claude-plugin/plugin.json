@@ -1,0 +1,11 @@
+{
+  "name": "dag-executor",
+  "description": "DAG-based parallel plan implementation for Claude Code: /auto-implement, /auto-run, /auto-step, /decompose, /implement-dag, /implement-plan, /explore, /plan-from-spec, /code-review, /triage-review skills, the plan-reviewer/code-reviewer/review-triager/task-decomposer agents, and the headless supervisor loop. Requires the dag-executor CLI on PATH (npm link from this repo).",
+  "author": {
+    "name": "Nikita Gusev",
+    "email": "nikita.gusev@visma.com"
+  },
+  "homepage": "https://github.com/Visma-Manager/dag-executor",
+  "repository": "https://github.com/Visma-Manager/dag-executor",
+  "keywords": ["orchestration", "dag", "parallel-implementation", "planning"]
+}
