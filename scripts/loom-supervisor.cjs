@@ -89,8 +89,12 @@ function readJson(filePath) {
   }
 }
 
+function isPositiveInteger(value) {
+  return Number.isInteger(value) && value > 0;
+}
+
 function isPidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (!isPositiveInteger(pid)) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -178,9 +182,9 @@ function resolvePaths(dagPath) {
 
 function activeSupervisorPid(checkpoint) {
   const supervisorPid = Number(checkpoint?.supervisorPid);
-  if (Number.isInteger(supervisorPid) && supervisorPid > 0) return supervisorPid;
+  if (isPositiveInteger(supervisorPid)) return supervisorPid;
   const detachedPid = Number(checkpoint?.detachedPid);
-  if (Number.isInteger(detachedPid) && detachedPid > 0) return detachedPid;
+  if (isPositiveInteger(detachedPid)) return detachedPid;
   return undefined;
 }
 
@@ -237,10 +241,24 @@ function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLog
   fs.mkdirSync(path.dirname(detachLogPath), { recursive: true });
   fs.mkdirSync(logDir, { recursive: true });
 
+  const runId = existing?.runId || makeRunId();
   const nodeArgs = [__filename, dagPath, ...userArgs];
   const caffeinate = caffeinateCommand();
   const command = caffeinate || process.execPath;
   const args = caffeinate ? ['-dimsu', process.execPath, ...nodeArgs] : nodeArgs;
+  const detachCommand = caffeinate ? `${caffeinate} -dimsu node` : process.execPath;
+
+  appendStatus(checkpointPath, {
+    runId,
+    dagPath,
+    status: 'starting',
+    detached: true,
+    detachCommand,
+    detachLogPath,
+    logDir,
+    nextAction: `stop with loom-supervisor --stop ${dagPath}`,
+  });
+
   const fd = fs.openSync(detachLogPath, 'a');
 
   let child;
@@ -256,16 +274,8 @@ function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLog
 
   child.unref();
   appendStatus(checkpointPath, {
-    runId: existing?.runId || makeRunId(),
-    dagPath,
-    status: 'starting',
-    detached: true,
     detachedPid: child.pid,
     supervisorPid: child.pid,
-    detachCommand: caffeinate ? `${caffeinate} -dimsu node` : process.execPath,
-    detachLogPath,
-    logDir,
-    nextAction: `stop with loom-supervisor --stop ${dagPath}`,
   });
 
   console.error(`[loom-supervisor] detached pid=${child.pid}`);
@@ -315,8 +325,7 @@ async function runOnce({ dagPath, userArgs, attempt, logDir, resume, signalState
 
 async function main(argv) {
   const invokedAs = path.basename(process.argv[1] || '');
-  const parsed = parseArgs(argv);
-  const { flags, dagArg, userArgs } = parsed;
+  const { flags, dagArg, userArgs } = parseArgs(argv);
   if (flags.help) {
     usage();
     return 0;
