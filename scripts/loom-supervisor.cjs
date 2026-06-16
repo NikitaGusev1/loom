@@ -13,9 +13,21 @@ const DEFAULT_CRASH_DELAY_MAX_SEC = 15 * 60;
 const DEFAULT_QUOTA_DELAY_SEC = 30 * 60;
 
 function usage() {
-  console.error(`Usage: loom-supervisor <dag.json> [dag-executor flags...]
+  console.error(`Usage:
+  loom-supervisor <dag.json> [dag-executor flags...]
+  loom-supervisor --detach <dag.json> [dag-executor flags...]
+  loom-supervisor --stop <dag.json>
+  loom-day-run <dag.json> [dag-executor flags...]
 
 Runs dag-executor in backlog mode and supervises the run.
+
+Day-run behavior:
+  - loom-day-run is shorthand for loom-supervisor --detach
+  - --detach starts the supervisor in the background
+  - --force-detach ignores a stale-looking active checkpoint
+  - --foreground disables loom-day-run's implicit --detach
+  - --stop sends SIGTERM to the PID in the checkpoint
+  - on macOS, detached runs use caffeinate when available
 
 Default behavior:
   - exit 0 from dag-executor: mark completed and exit 0
@@ -27,6 +39,7 @@ Environment:
   DAG_EXECUTOR_BIN                  default: dag-executor
   LOOM_SUPERVISOR_CHECKPOINT        default: <dag>.supervisor.json
   LOOM_SUPERVISOR_LOG_DIR           default: <dag-dir>/.loom-supervisor/logs
+  LOOM_SUPERVISOR_DETACH_LOG        default: <dag-dir>/.loom-supervisor/supervisor.log
   LOOM_SUPERVISOR_MAX_WALLCLOCK_SEC default: 86400
   LOOM_SUPERVISOR_MAX_ATTEMPTS      default: 100
   LOOM_SUPERVISOR_CRASH_DELAY_SEC   default: 60
@@ -76,6 +89,16 @@ function readJson(filePath) {
   }
 }
 
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function writeAtomic(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = path.join(
@@ -116,6 +139,143 @@ function makeRunId() {
   return `loom-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, 'Z')}-${process.pid}`;
 }
 
+function parseArgs(argv) {
+  const flags = {
+    detach: false,
+    forceDetach: false,
+    foreground: false,
+    stop: false,
+    help: false,
+  };
+  const rest = [];
+
+  for (const arg of argv) {
+    if (arg === '--detach') flags.detach = true;
+    else if (arg === '--force-detach') flags.forceDetach = true;
+    else if (arg === '--foreground') flags.foreground = true;
+    else if (arg === '--stop') flags.stop = true;
+    else if (arg === '-h' || arg === '--help') flags.help = true;
+    else rest.push(arg);
+  }
+
+  return { flags, dagArg: rest[0], userArgs: rest.slice(1) };
+}
+
+function resolvePaths(dagPath) {
+  const logDir = path.resolve(
+    process.env.LOOM_SUPERVISOR_LOG_DIR || path.join(path.dirname(dagPath), '.loom-supervisor', 'logs'),
+  );
+  return {
+    checkpointPath: path.resolve(
+      process.env.LOOM_SUPERVISOR_CHECKPOINT || dagPath.replace(/\.json$/, '.supervisor.json'),
+    ),
+    logDir,
+    detachLogPath: path.resolve(
+      process.env.LOOM_SUPERVISOR_DETACH_LOG || path.join(path.dirname(logDir), 'supervisor.log'),
+    ),
+  };
+}
+
+function activeSupervisorPid(checkpoint) {
+  const supervisorPid = Number(checkpoint?.supervisorPid);
+  if (Number.isInteger(supervisorPid) && supervisorPid > 0) return supervisorPid;
+  const detachedPid = Number(checkpoint?.detachedPid);
+  if (Number.isInteger(detachedPid) && detachedPid > 0) return detachedPid;
+  return undefined;
+}
+
+function checkpointLooksActive(checkpoint) {
+  if (!checkpoint || typeof checkpoint !== 'object') return false;
+  if (!['running', 'waiting', 'starting', 'stopping'].includes(checkpoint.status)) return false;
+  const pid = activeSupervisorPid(checkpoint);
+  return pid !== undefined && isPidAlive(pid);
+}
+
+function caffeinateCommand() {
+  if (process.platform !== 'darwin') return null;
+  const command = '/usr/bin/caffeinate';
+  return fs.existsSync(command) ? command : null;
+}
+
+function stopSupervisor({ dagPath, checkpointPath }) {
+  const checkpoint = readJson(checkpointPath);
+  if (!checkpoint) {
+    console.error(`[loom-supervisor] checkpoint not found: ${checkpointPath}`);
+    return 1;
+  }
+
+  const pid = activeSupervisorPid(checkpoint);
+  if (!pid || !isPidAlive(pid)) {
+    appendStatus(checkpointPath, {
+      status: 'stopped',
+      reason: 'supervisor PID is not running',
+      nextAction: `resume with loom-supervisor ${dagPath}`,
+    });
+    console.error(`[loom-supervisor] no running supervisor PID in ${checkpointPath}`);
+    return 3;
+  }
+
+  appendStatus(checkpointPath, {
+    status: 'stopping',
+    reason: `stop requested for pid ${pid}`,
+  });
+  process.kill(pid, 'SIGTERM');
+  console.error(`[loom-supervisor] sent SIGTERM to pid ${pid}`);
+  return 0;
+}
+
+function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLogPath, forceDetach }) {
+  const existing = readJson(checkpointPath);
+  if (!forceDetach && checkpointLooksActive(existing)) {
+    const pid = activeSupervisorPid(existing);
+    console.error(`[loom-supervisor] supervisor already running for this DAG (pid ${pid})`);
+    console.error(`[loom-supervisor] checkpoint=${checkpointPath}`);
+    console.error('[loom-supervisor] use --force-detach only after verifying the old run is stale');
+    return 4;
+  }
+
+  fs.mkdirSync(path.dirname(detachLogPath), { recursive: true });
+  fs.mkdirSync(logDir, { recursive: true });
+
+  const nodeArgs = [__filename, dagPath, ...userArgs];
+  const caffeinate = caffeinateCommand();
+  const command = caffeinate || process.execPath;
+  const args = caffeinate ? ['-dimsu', process.execPath, ...nodeArgs] : nodeArgs;
+  const fd = fs.openSync(detachLogPath, 'a');
+
+  let child;
+  try {
+    child = spawn(command, args, {
+      detached: true,
+      stdio: ['ignore', fd, fd],
+      env: process.env,
+    });
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  child.unref();
+  appendStatus(checkpointPath, {
+    runId: existing?.runId || makeRunId(),
+    dagPath,
+    status: 'starting',
+    detached: true,
+    detachedPid: child.pid,
+    supervisorPid: child.pid,
+    detachCommand: caffeinate ? `${caffeinate} -dimsu node` : process.execPath,
+    detachLogPath,
+    logDir,
+    nextAction: `stop with loom-supervisor --stop ${dagPath}`,
+  });
+
+  console.error(`[loom-supervisor] detached pid=${child.pid}`);
+  console.error(`[loom-supervisor] checkpoint=${checkpointPath}`);
+  console.error(`[loom-supervisor] supervisorLog=${detachLogPath}`);
+  console.error(`[loom-supervisor] attemptLogs=${logDir}`);
+  console.error(`[loom-supervisor] stop: loom-supervisor --stop ${dagPath}`);
+  return 0;
+}
+
 async function runOnce({ dagPath, userArgs, attempt, logDir, resume, signalState }) {
   fs.mkdirSync(logDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, 'Z');
@@ -154,10 +314,16 @@ async function runOnce({ dagPath, userArgs, attempt, logDir, resume, signalState
 }
 
 async function main(argv) {
-  const [dagArg, ...userArgs] = argv;
-  if (!dagArg || dagArg === '-h' || dagArg === '--help') {
+  const invokedAs = path.basename(process.argv[1] || '');
+  const parsed = parseArgs(argv);
+  const { flags, dagArg, userArgs } = parsed;
+  if (flags.help) {
     usage();
-    return dagArg ? 0 : 1;
+    return 0;
+  }
+  if (!dagArg) {
+    usage();
+    return 1;
   }
 
   const dagPath = path.resolve(dagArg);
@@ -166,12 +332,21 @@ async function main(argv) {
     return 1;
   }
 
-  const checkpointPath = path.resolve(
-    process.env.LOOM_SUPERVISOR_CHECKPOINT || dagPath.replace(/\.json$/, '.supervisor.json'),
-  );
-  const logDir = path.resolve(
-    process.env.LOOM_SUPERVISOR_LOG_DIR || path.join(path.dirname(dagPath), '.loom-supervisor', 'logs'),
-  );
+  const { checkpointPath, logDir, detachLogPath } = resolvePaths(dagPath);
+  if (flags.stop) return stopSupervisor({ dagPath, checkpointPath });
+
+  const defaultDetach = invokedAs === 'loom-day-run' && !flags.foreground;
+  if (flags.detach || defaultDetach) {
+    return detachSupervisor({
+      dagPath,
+      userArgs,
+      checkpointPath,
+      logDir,
+      detachLogPath,
+      forceDetach: flags.forceDetach,
+    });
+  }
+
   const maxWallclockSec = envInt('LOOM_SUPERVISOR_MAX_WALLCLOCK_SEC', DEFAULT_MAX_WALLCLOCK_SEC);
   const maxAttempts = envInt('LOOM_SUPERVISOR_MAX_ATTEMPTS', DEFAULT_MAX_ATTEMPTS);
   const crashDelaySec = envInt('LOOM_SUPERVISOR_CRASH_DELAY_SEC', DEFAULT_CRASH_DELAY_SEC);

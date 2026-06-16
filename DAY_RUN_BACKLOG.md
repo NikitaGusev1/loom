@@ -21,6 +21,8 @@ This is enough for short unattended runs, but not yet enough to confidently leav
 
 Add a command such as `loom-day-run <dag>` or `loom-supervisor --detach <dag>`.
 
+Status: initial implementation landed with `loom-day-run`, `loom-supervisor --detach`, duplicate-run protection, macOS `caffeinate` support, and `loom-supervisor --stop`.
+
 Acceptance criteria:
 
 - Starts the supervisor in the background.

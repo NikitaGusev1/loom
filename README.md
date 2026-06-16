@@ -27,6 +27,7 @@ Verify from any directory:
 
 ```sh
 dag-executor --slots
+loom-day-run --help
 loom-supervisor --help
 ```
 
@@ -342,17 +343,33 @@ Quota / usage-limit errors pause the run instead of retrying in a tight loop. Af
 For day-long unattended backlog runs, use the narrow supervisor wrapper:
 
 ```sh
-loom-supervisor <dagPath> --provider=codex
+loom-day-run <dagPath> --provider=codex
 ```
 
-It runs `dag-executor <dagPath> --backlog`, then supervises the run:
+`loom-day-run` starts a detached `loom-supervisor` process. The supervisor runs `dag-executor <dagPath> --backlog`, then supervises the run:
 
 - completed DAG exits `0`
 - quota / usage-limit pauses wait and retry with `--resume`
 - process crashes wait and restart with `--resume`
 - ordinary pauses such as merge conflicts or verification failures stop with exit `2`
 
-The supervisor writes a checkpoint next to the DAG at `<dag>.supervisor.json` and logs attempts under `<dag-dir>/.loom-supervisor/logs/`.
+The supervisor writes a checkpoint next to the DAG at `<dag>.supervisor.json`, writes the detached supervisor log at `<dag-dir>/.loom-supervisor/supervisor.log`, and logs attempts under `<dag-dir>/.loom-supervisor/logs/`.
+
+Foreground mode is still available:
+
+```sh
+loom-supervisor <dagPath> --provider=codex
+```
+
+Detached runs refuse to start a second active supervisor for the same DAG. Use `--force-detach` only after checking the old PID is stale.
+
+Stop a detached run:
+
+```sh
+loom-supervisor --stop <dagPath>
+```
+
+On macOS, detached runs use `caffeinate` when available so the machine does not sleep mid-run.
 
 Useful knobs:
 
@@ -362,6 +379,7 @@ LOOM_SUPERVISOR_QUOTA_DELAY_SEC=1800
 LOOM_SUPERVISOR_CRASH_DELAY_SEC=60
 LOOM_SUPERVISOR_CHECKPOINT=/path/to/status.json
 LOOM_SUPERVISOR_LOG_DIR=/path/to/logs
+LOOM_SUPERVISOR_DETACH_LOG=/path/to/supervisor.log
 ```
 
 ### Model aliases
