@@ -16,8 +16,10 @@ function usage() {
   console.error(`Usage:
   loom-supervisor <dag.json> [dag-executor flags...]
   loom-supervisor --detach <dag.json> [dag-executor flags...]
+  loom-supervisor --status <dag.json>
   loom-supervisor --stop <dag.json>
   loom-day-run <dag.json> [dag-executor flags...]
+  loom-status <dag.json>
 
 Runs dag-executor in backlog mode and supervises the run.
 
@@ -26,6 +28,7 @@ Day-run behavior:
   - --detach starts the supervisor in the background
   - --force-detach ignores a stale-looking active checkpoint
   - --foreground disables loom-day-run's implicit --detach
+  - --status prints checkpoint + DAG task status
   - --stop sends SIGTERM to the PID in the checkpoint
   - on macOS, detached runs use caffeinate when available
 
@@ -78,6 +81,10 @@ function statePathFor(dagPath) {
   return dagPath.replace(/\.json$/, '.state.json');
 }
 
+function eventLogPathFor(dagPath) {
+  return dagPath.replace(/\.json$/, '.events.jsonl');
+}
+
 function readJson(filePath) {
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -86,6 +93,25 @@ function readJson(filePath) {
   } catch (err) {
     if (err && err.code === 'ENOENT') return null;
     return null;
+  }
+}
+
+function readJsonLines(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    return raw
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
   }
 }
 
@@ -121,6 +147,12 @@ function appendStatus(checkpointPath, patch) {
 }
 
 function latestPauseReason(dagPath) {
+  const events = readJsonLines(eventLogPathFor(dagPath));
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event && event.kind === 'dag.paused' && typeof event.reason === 'string') return event.reason;
+  }
+
   const state = readJson(statePathFor(dagPath));
   if (!state || state.status !== 'paused') return '';
   return typeof state.reason === 'string' ? state.reason : '';
@@ -148,6 +180,7 @@ function parseArgs(argv) {
     detach: false,
     forceDetach: false,
     foreground: false,
+    status: false,
     stop: false,
     help: false,
   };
@@ -157,6 +190,7 @@ function parseArgs(argv) {
     if (arg === '--detach') flags.detach = true;
     else if (arg === '--force-detach') flags.forceDetach = true;
     else if (arg === '--foreground') flags.foreground = true;
+    else if (arg === '--status') flags.status = true;
     else if (arg === '--stop') flags.stop = true;
     else if (arg === '-h' || arg === '--help') flags.help = true;
     else rest.push(arg);
@@ -226,6 +260,92 @@ function stopSupervisor({ dagPath, checkpointPath }) {
   process.kill(pid, 'SIGTERM');
   console.error(`[loom-supervisor] sent SIGTERM to pid ${pid}`);
   return 0;
+}
+
+function taskCounts({ dagPath }) {
+  const dag = readJson(dagPath);
+  const state = readJson(statePathFor(dagPath));
+  const stateTasks = state && typeof state === 'object' && state.tasks ? state.tasks : {};
+  const dagTasks = Array.isArray(dag?.tasks) ? dag.tasks : [];
+  const taskIds = dagTasks.length > 0 ? dagTasks.map((task) => task.id).filter(Boolean) : Object.keys(stateTasks);
+  const statusFor = (id) => stateTasks[id]?.status || 'pending';
+  const failed = new Set(taskIds.filter((id) => statusFor(id) === 'failed'));
+  const completed = taskIds.filter((id) => statusFor(id) === 'completed').length;
+  const taskById = new Map(dagTasks.map((task) => [task.id, task]));
+  const blockedMemo = new Map();
+
+  const isBlocked = (id, visiting = new Set()) => {
+    if (blockedMemo.has(id)) return blockedMemo.get(id);
+    if (statusFor(id) === 'completed' || statusFor(id) === 'failed') {
+      blockedMemo.set(id, false);
+      return false;
+    }
+    if (visiting.has(id)) return false;
+    visiting.add(id);
+    const task = taskById.get(id);
+    const deps = Array.isArray(task?.dependencies) ? task.dependencies : [];
+    const blocked = deps.some((depId) => failed.has(depId) || isBlocked(depId, visiting));
+    visiting.delete(id);
+    blockedMemo.set(id, blocked);
+    return blocked;
+  };
+
+  const blocked = taskIds.filter((id) => isBlocked(id)).length;
+  const failedCount = failed.size;
+  return {
+    completed,
+    failed: failedCount,
+    blocked,
+    pending: Math.max(0, taskIds.length - completed - failedCount - blocked),
+  };
+}
+
+function formatTaskCounts(counts) {
+  return `completed=${counts.completed} failed=${counts.failed} pending=${counts.pending} blocked=${counts.blocked}`;
+}
+
+function printField(label, value) {
+  console.log(`${label}: ${value === undefined || value === null || value === '' ? '-' : value}`);
+}
+
+function statusExitCode(status, counts, checkpointMissing) {
+  if (checkpointMissing) return 1;
+  if (counts.blocked > 0) return 2;
+  if (['paused', 'stopped', 'aborted'].includes(status)) return 2;
+  return 0;
+}
+
+function showStatus({ dagPath, checkpointPath }) {
+  const checkpoint = readJson(checkpointPath);
+  const counts = taskCounts({ dagPath });
+
+  if (!checkpoint) {
+    console.error(`[loom-supervisor] checkpoint not found: ${checkpointPath}`);
+    printField('status', 'missing');
+    printField('dagPath', dagPath);
+    printField('checkpoint', checkpointPath);
+    printField('tasks', formatTaskCounts(counts));
+    return statusExitCode('missing', counts, true);
+  }
+
+  const status = checkpoint.status || 'unknown';
+  const pid = activeSupervisorPid(checkpoint);
+  const pauseReason = status === 'paused' ? latestPauseReason(dagPath) || checkpoint.reason : checkpoint.reason;
+
+  printField('status', status);
+  printField('runId', checkpoint.runId);
+  printField('dagPath', checkpoint.dagPath || dagPath);
+  printField('checkpoint', checkpointPath);
+  printField('supervisorPid', pid ? `${pid}${isPidAlive(pid) ? ' alive' : ' not-running'}` : '');
+  printField('attempt', checkpoint.attempts);
+  printField('lastExitCode', checkpoint.lastExitCode);
+  printField('lastLogPath', checkpoint.lastLogPath);
+  printField('nextRetryAt', checkpoint.nextRunAt);
+  printField('waitKind', checkpoint.waitKind);
+  printField('pauseReason', pauseReason);
+  printField('nextAction', checkpoint.nextAction);
+  printField('tasks', formatTaskCounts(counts));
+  return statusExitCode(status, counts, false);
 }
 
 function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLogPath, forceDetach }) {
@@ -342,6 +462,8 @@ async function main(argv) {
   }
 
   const { checkpointPath, logDir, detachLogPath } = resolvePaths(dagPath);
+  const defaultStatus = invokedAs === 'loom-status';
+  if (flags.status || defaultStatus) return showStatus({ dagPath, checkpointPath });
   if (flags.stop) return stopSupervisor({ dagPath, checkpointPath });
 
   const defaultDetach = invokedAs === 'loom-day-run' && !flags.foreground;

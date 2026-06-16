@@ -369,6 +369,15 @@ Stop a detached run:
 loom-supervisor --stop <dagPath>
 ```
 
+Check run status:
+
+```sh
+loom-status <dagPath>
+# or: loom-supervisor --status <dagPath>
+```
+
+Status output includes the supervisor state, attempt number, last exit code, last attempt log, next retry time, latest pause reason, and DAG task counts. It exits non-zero when the checkpoint is missing or the run is blocked.
+
 On macOS, detached runs use `caffeinate` when available so the machine does not sleep mid-run.
 
 Useful knobs:

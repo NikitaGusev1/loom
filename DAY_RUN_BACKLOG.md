@@ -17,11 +17,11 @@ This is enough for short unattended runs, but not yet enough to confidently leav
 
 ## Backlog
 
-### 1. Detached Day-Run Command
+### 1. Detached Day-Run Command — Complete
 
 Add a command such as `loom-day-run <dag>` or `loom-supervisor --detach <dag>`.
 
-Status: initial implementation landed with `loom-day-run`, `loom-supervisor --detach`, duplicate-run protection, macOS `caffeinate` support, and `loom-supervisor --stop`.
+Status: complete. Initial implementation landed with `loom-day-run`, `loom-supervisor --detach`, duplicate-run protection, macOS `caffeinate` support, and `loom-supervisor --stop`.
 
 Acceptance criteria:
 
@@ -31,9 +31,11 @@ Acceptance criteria:
 - Refuses to start a duplicate supervisor for the same DAG unless explicitly forced.
 - Provides a clear command for stopping the run.
 
-### 2. Status / Monitor Command
+### 2. Status / Monitor Command — Complete
 
 Add `loom-status <dag>` or `loom-supervisor --status <dag>`.
+
+Status: complete. Added `loom-supervisor --status <dag>` and `loom-status <dag>`, backed by the supervisor checkpoint, DAG state, and latest `dag.paused` event reason.
 
 Acceptance criteria:
 

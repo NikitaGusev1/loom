@@ -71,6 +71,14 @@ wait_json_value() {
   fail "wait_json_value ${field} expected=<$expected> actual=<${value}> file=${file}"
 }
 
+run_status() {
+  local dag="$1" ckpt="$2" out="$3"
+  set +e
+  env LOOM_SUPERVISOR_CHECKPOINT="$ckpt" node "$SUPERVISOR" --status "$dag" >"$out" 2>&1
+  STATUS_RC=$?
+  set -e
+}
+
 STUB="${TMP_DIR}/dag-executor-stub.sh"
 cat >"$STUB" <<'STUB'
 #!/usr/bin/env bash
@@ -102,10 +110,23 @@ fi
 
 if [[ -n "$reason" ]]; then
   state="${DAG_PATH%.json}.state.json"
+  events="${DAG_PATH%.json}.events.jsonl"
   node -e '
     const fs = require("fs");
-    fs.writeFileSync(process.argv[1], JSON.stringify({ status: "paused", reason: process.argv[2] }, null, 2) + "\n");
-  ' "$state" "$reason"
+    const [statePath, eventsPath, dagPath, reason] = process.argv.slice(1);
+    fs.writeFileSync(statePath, JSON.stringify({ status: "paused" }, null, 2) + "\n");
+    const older = {
+      kind: "dag.paused",
+      schemaVersion: 1,
+      ts: "2000-01-01T00:00:00.000Z",
+      dagPath,
+      dagId: "smoke",
+      reason: "older pause reason",
+      currentLayer: 0
+    };
+    const latest = { ...older, ts: "2000-01-01T00:00:01.000Z", reason };
+    fs.writeFileSync(eventsPath, JSON.stringify(older) + "\n" + JSON.stringify(latest) + "\n");
+  ' "$state" "$events" "$DAG_PATH" "$reason"
 fi
 
 exit "$code"
@@ -167,6 +188,62 @@ assert_contains 'quota_retry: resume flag' '--resume' "$CASE_INV"
 run_case ordinary_pause 2 $'2\tMerge conflict in task-a'
 assert_eq 'ordinary_pause: status' paused "$(json_get "$CASE_CKPT" status)"
 assert_eq 'ordinary_pause: attempts' 1 "$(json_get "$CASE_CKPT" attempts)"
+
+STATUS_OUT="${CASE_DIR}/status.txt"
+run_status "${CASE_DIR}/dag.json" "$CASE_CKPT" "$STATUS_OUT"
+assert_eq 'ordinary_pause status command: exit' 2 "$STATUS_RC"
+assert_contains 'ordinary_pause status command: status' 'status: paused' "$STATUS_OUT"
+assert_contains 'ordinary_pause status command: attempt' 'attempt: 1' "$STATUS_OUT"
+assert_contains 'ordinary_pause status command: exit code' 'lastExitCode: 2' "$STATUS_OUT"
+assert_contains 'ordinary_pause status command: pause reason' 'pauseReason: Merge conflict in task-a' "$STATUS_OUT"
+assert_contains 'ordinary_pause status command: task counts' 'tasks: completed=0 failed=0 pending=0 blocked=0' "$STATUS_OUT"
+
+MISSING_DIR="${TMP_DIR}/missing_status"
+mkdir -p "$MISSING_DIR"
+MISSING_DAG="${MISSING_DIR}/dag.json"
+MISSING_CKPT="${MISSING_DIR}/missing.json"
+MISSING_OUT="${MISSING_DIR}/status.txt"
+printf '{}\n' >"$MISSING_DAG"
+run_status "$MISSING_DAG" "$MISSING_CKPT" "$MISSING_OUT"
+assert_eq 'missing status command: exit' 1 "$STATUS_RC"
+assert_contains 'missing status command: status' 'status: missing' "$MISSING_OUT"
+
+BLOCKED_DIR="${TMP_DIR}/blocked_status"
+mkdir -p "$BLOCKED_DIR"
+BLOCKED_DAG="${BLOCKED_DIR}/dag.json"
+BLOCKED_STATE="${BLOCKED_DIR}/dag.state.json"
+BLOCKED_CKPT="${BLOCKED_DIR}/ckpt.json"
+BLOCKED_OUT="${BLOCKED_DIR}/status.txt"
+node -e '
+  const fs = require("fs");
+  fs.writeFileSync(process.argv[1], JSON.stringify({
+    tasks: [
+      { id: "task-a", dependencies: [] },
+      { id: "task-b", dependencies: ["task-a"] },
+      { id: "task-c", dependencies: ["task-b"] }
+    ]
+  }, null, 2) + "\n");
+  fs.writeFileSync(process.argv[2], JSON.stringify({
+    status: "running",
+    tasks: {
+      "task-a": { status: "failed" },
+      "task-b": { status: "pending" },
+      "task-c": { status: "pending" }
+    }
+  }, null, 2) + "\n");
+  fs.writeFileSync(process.argv[3], JSON.stringify({
+    status: "running",
+    attempts: 3,
+    lastExitCode: 2,
+    lastLogPath: "/tmp/last.log",
+    nextRunAt: "2030-01-01T00:00:00.000Z"
+  }, null, 2) + "\n");
+' "$BLOCKED_DAG" "$BLOCKED_STATE" "$BLOCKED_CKPT"
+run_status "$BLOCKED_DAG" "$BLOCKED_CKPT" "$BLOCKED_OUT"
+assert_eq 'blocked status command: exit' 2 "$STATUS_RC"
+assert_contains 'blocked status command: status' 'status: running' "$BLOCKED_OUT"
+assert_contains 'blocked status command: retry' 'nextRetryAt: 2030-01-01T00:00:00.000Z' "$BLOCKED_OUT"
+assert_contains 'blocked status command: task counts' 'tasks: completed=0 failed=1 pending=0 blocked=2' "$BLOCKED_OUT"
 
 DETACH_DIR="${TMP_DIR}/detach_completed"
 mkdir -p "$DETACH_DIR"
