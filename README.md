@@ -27,6 +27,7 @@ Verify from any directory:
 
 ```sh
 dag-executor --slots
+loom-supervisor --help
 ```
 
 > **nvm/volta caveat**: `npm link` installs into the _active_ node version's global prefix. If you switch node versions, the `dag-executor` command disappears — re-run `npm link` from this repo under the new version.
@@ -48,7 +49,23 @@ In Claude Code:
 
 Requires GitHub auth that can clone this private repo over https (e.g. `gh auth login`). The plugin is unversioned on purpose — every commit is a new version, so `/plugin update dag-executor` after any push picks up the latest.
 
-> The plugin does **not** install the CLI binary — step 1 is still required. `/implement-dag` and the supervisor invoke `dag-executor` from PATH.
+> The plugin does **not** install the CLI binaries — step 1 is still required. `/implement-dag` and the supervisors invoke `dag-executor` / `loom-supervisor` from PATH.
+
+### 3. Codex plugin
+
+The Codex-native plugin bundle lives under `codex/plugins/loom`. It ports the two review helpers that were Claude agents into Codex skills:
+
+- `/simplify` — behavior-preserving simplification of the current diff.
+- `/code-review` — comprehensive diff review with a structured report in `.claude/ai/`.
+
+Install the local marketplace once from this repo:
+
+```sh
+codex plugin marketplace add ./codex
+codex plugin add loom@loom-local
+```
+
+Start a new Codex thread after installing or updating the plugin so the slash-command surface is reloaded.
 
 ---
 
@@ -319,6 +336,33 @@ dag-executor <dagPath> --backlog --resume
 ```
 
 Quota / usage-limit errors pause the run instead of retrying in a tight loop. After the account limit resets, run the same command with `--resume`; completed and merged tasks are skipped, and the quota-blocked task is attempted again.
+
+### Loom supervisor
+
+For day-long unattended backlog runs, use the narrow supervisor wrapper:
+
+```sh
+loom-supervisor <dagPath> --provider=codex
+```
+
+It runs `dag-executor <dagPath> --backlog`, then supervises the run:
+
+- completed DAG exits `0`
+- quota / usage-limit pauses wait and retry with `--resume`
+- process crashes wait and restart with `--resume`
+- ordinary pauses such as merge conflicts or verification failures stop with exit `2`
+
+The supervisor writes a checkpoint next to the DAG at `<dag>.supervisor.json` and logs attempts under `<dag-dir>/.loom-supervisor/logs/`.
+
+Useful knobs:
+
+```sh
+LOOM_SUPERVISOR_MAX_WALLCLOCK_SEC=86400
+LOOM_SUPERVISOR_QUOTA_DELAY_SEC=1800
+LOOM_SUPERVISOR_CRASH_DELAY_SEC=60
+LOOM_SUPERVISOR_CHECKPOINT=/path/to/status.json
+LOOM_SUPERVISOR_LOG_DIR=/path/to/logs
+```
 
 ### Model aliases
 

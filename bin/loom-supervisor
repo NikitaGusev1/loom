@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# loom-supervisor - PATH-visible wrapper for scripts/loom-supervisor.cjs.
+set -euo pipefail
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec node "${PLUGIN_ROOT}/scripts/loom-supervisor.cjs" "$@"

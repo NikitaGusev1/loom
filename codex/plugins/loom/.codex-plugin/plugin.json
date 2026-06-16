@@ -1,0 +1,25 @@
+{
+  "name": "loom",
+  "version": "0.1.0",
+  "description": "Codex-native Loom commands for simplifying and reviewing current code changes.",
+  "author": {
+    "name": "Nikita Gusev",
+    "email": "nikita.gusev@visma.com"
+  },
+  "homepage": "https://github.com/NikitaGusev1/loom",
+  "repository": "https://github.com/NikitaGusev1/loom",
+  "license": "UNLICENSED",
+  "keywords": ["codex", "code-review", "simplification", "loom"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Loom",
+    "shortDescription": "Simplify and review current code changes in Codex",
+    "longDescription": "Loom provides Codex-native commands for two focused engineering workflows: behavior-preserving simplification of recently changed code and comprehensive pre-commit code review with a structured report.",
+    "developerName": "Nikita Gusev",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": ["Simplify the current diff.", "Review my current changes.", "Run simplify, then code review."],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

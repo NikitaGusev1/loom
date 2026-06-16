@@ -1,6 +1,6 @@
 {
   "name": "dag-executor",
-  "description": "DAG-based parallel plan implementation for Claude Code: /auto-implement, /auto-run, /auto-step, /decompose, /implement-dag, /implement-plan, /explore, /plan-from-spec, /code-review, /triage-review skills, the plan-reviewer/code-reviewer/review-triager/task-decomposer/code-simplifier agents, and the headless supervisor loop. Requires the dag-executor CLI on PATH (npm link from this repo).",
+  "description": "DAG-based parallel plan implementation for Claude Code: /auto-implement, /auto-run, /auto-step, /decompose, /implement-dag, /implement-plan, /explore, /plan-from-spec, /code-review, /triage-review skills, the plan-reviewer/code-reviewer/review-triager/task-decomposer/code-simplifier agents, and headless supervisor loops. Requires the dag-executor and loom-supervisor CLIs on PATH (npm link from this repo).",
   "author": {
     "name": "Nikita Gusev",
     "email": "nikita.gusev@visma.com"
