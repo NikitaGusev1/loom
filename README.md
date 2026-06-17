@@ -363,6 +363,8 @@ loom-supervisor <dagPath> --provider=codex
 
 Detached runs refuse to start a second active supervisor for the same DAG. Use `--force-detach` only after checking the old PID is stale.
 
+Before starting, the supervisor runs preflight checks: DAG JSON validation, `dag-executor` / provider CLI / `git` availability, stale DAG lock and supervisor PID detection, a git worktree creation probe, dirty-repo detection, and a cheap provider `--version` smoke check. Dirty repos are blocked by default; pass `--allow-dirty-repo` only when the current working tree state is intentional.
+
 Stop a detached run:
 
 ```sh

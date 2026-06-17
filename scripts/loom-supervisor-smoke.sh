@@ -55,6 +55,41 @@ json_get() {
   ' "$1" "$2"
 }
 
+write_smoke_dag() {
+  local dag="$1"
+  node -e '
+    const fs = require("fs");
+    fs.writeFileSync(process.argv[1], JSON.stringify({
+      meta: {
+        id: "smoke",
+        source: {
+          type: "description",
+          title: "Smoke",
+          description: "Smoke DAG",
+          figmaUrls: [],
+          acceptanceCriteria: []
+        },
+        createdAt: "2024-01-01T00:00:00.000Z",
+        gitCommit: "abc123",
+        branch: "main",
+        qualityReport: { iterations: 1, checksRun: [], allPassed: true }
+      },
+      tasks: [{
+        id: "task-a",
+        name: "Task A",
+        description: "Smoke task",
+        dependencies: [],
+        contracts: { inputs: {}, outputs: {} },
+        context: { files: [] },
+        completionCriteria: { automated: [], manual: [] },
+        estimatedScope: "single-component",
+        weight: "standard"
+      }],
+      executionLayers: [{ layer: 0, description: "Layer 0", taskIds: ["task-a"] }]
+    }, null, 2) + "\n");
+  ' "$dag"
+}
+
 wait_json_value() {
   local file="$1" field="$2" expected="$3"
   local i value
@@ -133,6 +168,18 @@ exit "$code"
 STUB
 chmod +x "$STUB"
 
+CODEX_STUB="${TMP_DIR}/codex-stub.sh"
+cat >"$CODEX_STUB" <<'CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'codex smoke stub\n'
+  exit 0
+fi
+exit 0
+CODEX
+chmod +x "$CODEX_STUB"
+
 run_case() {
   local name="$1" expected_rc="$2" plan_body="$3"
   local dir="${TMP_DIR}/${name}"
@@ -144,13 +191,14 @@ run_case() {
   local ckpt="${dir}/ckpt.json"
   local logs="${dir}/logs"
 
-  printf '{}\n' >"$dag"
+  write_smoke_dag "$dag"
   printf '%s\n' "$plan_body" >"$plan"
   : >"$inv"
 
   set +e
   env \
     DAG_EXECUTOR_BIN="$STUB" \
+    CODEX_BIN="$CODEX_STUB" \
     STUB_PLAN="$plan" \
     STUB_INV="$inv" \
     STUB_COUNT="$count" \
@@ -159,7 +207,7 @@ run_case() {
     LOOM_SUPERVISOR_CRASH_DELAY_SEC=0 \
     LOOM_SUPERVISOR_QUOTA_DELAY_SEC=0 \
     LOOM_SUPERVISOR_MAX_ATTEMPTS=5 \
-    node "$SUPERVISOR" "$dag" --provider=codex >/dev/null 2>&1
+    node "$SUPERVISOR" --allow-dirty-repo "$dag" --provider=codex >/dev/null 2>&1
   local rc=$?
   set -e
 
@@ -189,6 +237,138 @@ run_case ordinary_pause 2 $'2\tMerge conflict in task-a'
 assert_eq 'ordinary_pause: status' paused "$(json_get "$CASE_CKPT" status)"
 assert_eq 'ordinary_pause: attempts' 1 "$(json_get "$CASE_CKPT" attempts)"
 
+INVALID_DIR="${TMP_DIR}/invalid_preflight"
+mkdir -p "$INVALID_DIR"
+INVALID_DAG="${INVALID_DIR}/dag.json"
+INVALID_CKPT="${INVALID_DIR}/ckpt.json"
+INVALID_OUT="${INVALID_DIR}/out.txt"
+printf '{"tasks":[]}\n' >"$INVALID_DAG"
+set +e
+env \
+  DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
+  LOOM_SUPERVISOR_CHECKPOINT="$INVALID_CKPT" \
+  node "$SUPERVISOR" --allow-dirty-repo "$INVALID_DAG" --provider=codex >"$INVALID_OUT" 2>&1
+INVALID_RC=$?
+set -e
+assert_eq 'invalid_preflight: exit' 1 "$INVALID_RC"
+assert_contains 'invalid_preflight: validation message' 'preflight failed: DAG validation failed' "$INVALID_OUT"
+
+SCHEMA_DIR="${TMP_DIR}/schema_preflight"
+mkdir -p "$SCHEMA_DIR"
+SCHEMA_DAG="${SCHEMA_DIR}/dag.json"
+SCHEMA_CKPT="${SCHEMA_DIR}/ckpt.json"
+SCHEMA_OUT="${SCHEMA_DIR}/out.txt"
+write_smoke_dag "$SCHEMA_DAG"
+node -e '
+  const fs = require("fs");
+  const dag = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  delete dag.meta.source;
+  fs.writeFileSync(process.argv[1], JSON.stringify(dag, null, 2) + "\n");
+' "$SCHEMA_DAG"
+set +e
+env \
+  DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
+  LOOM_SUPERVISOR_CHECKPOINT="$SCHEMA_CKPT" \
+  node "$SUPERVISOR" --allow-dirty-repo "$SCHEMA_DAG" --provider=codex >"$SCHEMA_OUT" 2>&1
+SCHEMA_RC=$?
+set -e
+assert_eq 'schema_preflight: exit' 1 "$SCHEMA_RC"
+assert_contains 'schema_preflight: validation message' 'DAG validation failed: meta.source must be an object' "$SCHEMA_OUT"
+
+DIRTY_DIR="${TMP_DIR}/dirty_repo_preflight"
+mkdir -p "$DIRTY_DIR"
+write_smoke_dag "${DIRTY_DIR}/dag.json"
+(
+  cd "$DIRTY_DIR"
+  git init -q
+  printf 'dirty\n' >dirty.txt
+  set +e
+  env \
+    DAG_EXECUTOR_BIN="$STUB" \
+    CODEX_BIN="$CODEX_STUB" \
+    LOOM_SUPERVISOR_CHECKPOINT="${DIRTY_DIR}/ckpt.json" \
+    node "$SUPERVISOR" "${DIRTY_DIR}/dag.json" --provider=codex >"${DIRTY_DIR}/out.txt" 2>&1
+  DIRTY_RC=$?
+  set -e
+  assert_eq 'dirty_repo_preflight: exit' 1 "$DIRTY_RC"
+  assert_contains 'dirty_repo_preflight: dirty message' 'git working tree is dirty' "${DIRTY_DIR}/out.txt"
+)
+
+STALE_LOCK_DIR="${TMP_DIR}/stale_lock_preflight"
+mkdir -p "$STALE_LOCK_DIR"
+STALE_LOCK_DAG="${STALE_LOCK_DIR}/dag.json"
+STALE_LOCK_PLAN="${STALE_LOCK_DIR}/plan.tsv"
+STALE_LOCK_INV="${STALE_LOCK_DIR}/inv.log"
+STALE_LOCK_COUNT="${STALE_LOCK_DIR}/count"
+STALE_LOCK_CKPT="${STALE_LOCK_DIR}/ckpt.json"
+STALE_LOCK_OUT="${STALE_LOCK_DIR}/out.txt"
+write_smoke_dag "$STALE_LOCK_DAG"
+printf '0\n' >"$STALE_LOCK_PLAN"
+: >"$STALE_LOCK_INV"
+node -e 'const fs = require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ pid: 999999 }) + "\n");' "${STALE_LOCK_DAG}.lock"
+env \
+  DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
+  STUB_PLAN="$STALE_LOCK_PLAN" \
+  STUB_INV="$STALE_LOCK_INV" \
+  STUB_COUNT="$STALE_LOCK_COUNT" \
+  LOOM_SUPERVISOR_CHECKPOINT="$STALE_LOCK_CKPT" \
+  LOOM_SUPERVISOR_CRASH_DELAY_SEC=0 \
+  LOOM_SUPERVISOR_QUOTA_DELAY_SEC=0 \
+  LOOM_SUPERVISOR_MAX_ATTEMPTS=5 \
+  node "$SUPERVISOR" --allow-dirty-repo "$STALE_LOCK_DAG" --provider=codex >"$STALE_LOCK_OUT" 2>&1
+assert_eq 'stale_lock_preflight: status' completed "$(json_get "$STALE_LOCK_CKPT" status)"
+[[ ! -f "${STALE_LOCK_DAG}.lock" ]] || fail 'stale_lock_preflight lock was not removed'
+pass 'stale_lock_preflight: lock removed'
+assert_contains 'stale_lock_preflight: warning' 'stale DAG lock detected and removed' "$STALE_LOCK_OUT"
+
+ACTIVE_LOCK_DIR="${TMP_DIR}/active_lock_preflight"
+mkdir -p "$ACTIVE_LOCK_DIR"
+ACTIVE_LOCK_DAG="${ACTIVE_LOCK_DIR}/dag.json"
+ACTIVE_LOCK_OUT="${ACTIVE_LOCK_DIR}/out.txt"
+write_smoke_dag "$ACTIVE_LOCK_DAG"
+node -e 'const fs = require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ pid: Number(process.argv[2]) }) + "\n");' "${ACTIVE_LOCK_DAG}.lock" "$$"
+set +e
+env \
+  DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
+  node "$SUPERVISOR" --allow-dirty-repo "$ACTIVE_LOCK_DAG" --provider=codex >"$ACTIVE_LOCK_OUT" 2>&1
+ACTIVE_LOCK_RC=$?
+set -e
+assert_eq 'active_lock_preflight: exit' 1 "$ACTIVE_LOCK_RC"
+assert_contains 'active_lock_preflight: lock message' 'DAG lock is held by running pid' "$ACTIVE_LOCK_OUT"
+
+STALE_PID_DIR="${TMP_DIR}/stale_pid_preflight"
+mkdir -p "$STALE_PID_DIR"
+STALE_PID_DAG="${STALE_PID_DIR}/dag.json"
+STALE_PID_PLAN="${STALE_PID_DIR}/plan.tsv"
+STALE_PID_INV="${STALE_PID_DIR}/inv.log"
+STALE_PID_COUNT="${STALE_PID_DIR}/count"
+STALE_PID_CKPT="${STALE_PID_DIR}/ckpt.json"
+STALE_PID_OUT="${STALE_PID_DIR}/out.txt"
+write_smoke_dag "$STALE_PID_DAG"
+printf '0\n' >"$STALE_PID_PLAN"
+: >"$STALE_PID_INV"
+node -e '
+  const fs = require("fs");
+  fs.writeFileSync(process.argv[1], JSON.stringify({ status: "running", supervisorPid: 999999 }, null, 2) + "\n");
+' "$STALE_PID_CKPT"
+env \
+  DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
+  STUB_PLAN="$STALE_PID_PLAN" \
+  STUB_INV="$STALE_PID_INV" \
+  STUB_COUNT="$STALE_PID_COUNT" \
+  LOOM_SUPERVISOR_CHECKPOINT="$STALE_PID_CKPT" \
+  LOOM_SUPERVISOR_CRASH_DELAY_SEC=0 \
+  LOOM_SUPERVISOR_QUOTA_DELAY_SEC=0 \
+  LOOM_SUPERVISOR_MAX_ATTEMPTS=5 \
+  node "$SUPERVISOR" --allow-dirty-repo "$STALE_PID_DAG" --provider=codex >"$STALE_PID_OUT" 2>&1
+assert_eq 'stale_pid_preflight: status' completed "$(json_get "$STALE_PID_CKPT" status)"
+assert_contains 'stale_pid_preflight: warning' 'stale supervisor PID 999999' "$STALE_PID_OUT"
+
 STATUS_OUT="${CASE_DIR}/status.txt"
 run_status "${CASE_DIR}/dag.json" "$CASE_CKPT" "$STATUS_OUT"
 assert_eq 'ordinary_pause status command: exit' 2 "$STATUS_RC"
@@ -196,7 +376,7 @@ assert_contains 'ordinary_pause status command: status' 'status: paused' "$STATU
 assert_contains 'ordinary_pause status command: attempt' 'attempt: 1' "$STATUS_OUT"
 assert_contains 'ordinary_pause status command: exit code' 'lastExitCode: 2' "$STATUS_OUT"
 assert_contains 'ordinary_pause status command: pause reason' 'pauseReason: Merge conflict in task-a' "$STATUS_OUT"
-assert_contains 'ordinary_pause status command: task counts' 'tasks: completed=0 failed=0 pending=0 blocked=0' "$STATUS_OUT"
+assert_contains 'ordinary_pause status command: task counts' 'tasks: completed=0 failed=0 pending=1 blocked=0' "$STATUS_OUT"
 
 MISSING_DIR="${TMP_DIR}/missing_status"
 mkdir -p "$MISSING_DIR"
@@ -254,12 +434,13 @@ DETACH_COUNT="${DETACH_DIR}/count"
 DETACH_CKPT="${DETACH_DIR}/ckpt.json"
 DETACH_LOG_DIR="${DETACH_DIR}/logs"
 DETACH_SUPERVISOR_LOG="${DETACH_DIR}/supervisor.log"
-printf '{}\n' >"$DETACH_DAG"
+write_smoke_dag "$DETACH_DAG"
 printf '0\n' >"$DETACH_PLAN"
 : >"$DETACH_INV"
 
 env \
   DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
   STUB_PLAN="$DETACH_PLAN" \
   STUB_INV="$DETACH_INV" \
   STUB_COUNT="$DETACH_COUNT" \
@@ -269,7 +450,7 @@ env \
   LOOM_SUPERVISOR_CRASH_DELAY_SEC=0 \
   LOOM_SUPERVISOR_QUOTA_DELAY_SEC=0 \
   LOOM_SUPERVISOR_MAX_ATTEMPTS=5 \
-  node "$SUPERVISOR" --detach "$DETACH_DAG" --provider=codex >/dev/null 2>&1
+  node "$SUPERVISOR" --allow-dirty-repo --detach "$DETACH_DAG" --provider=codex >/dev/null 2>&1
 wait_json_value "$DETACH_CKPT" status completed
 assert_file_exists 'detach_completed: supervisor log' "$DETACH_SUPERVISOR_LOG"
 assert_contains 'detach_completed: backlog flag' '--backlog' "$DETACH_INV"
@@ -279,7 +460,7 @@ DUP_DIR="${TMP_DIR}/duplicate_refusal"
 mkdir -p "$DUP_DIR"
 DUP_DAG="${DUP_DIR}/dag.json"
 DUP_CKPT="${DUP_DIR}/ckpt.json"
-printf '{}\n' >"$DUP_DAG"
+write_smoke_dag "$DUP_DAG"
 node -e '
   const fs = require("fs");
   fs.writeFileSync(process.argv[1], JSON.stringify({ status: "running", supervisorPid: Number(process.argv[2]) }, null, 2) + "\n");
@@ -288,11 +469,12 @@ node -e '
 set +e
 env \
   DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
   STUB_PLAN="$DETACH_PLAN" \
   STUB_INV="${DUP_DIR}/inv.log" \
   STUB_COUNT="${DUP_DIR}/count" \
   LOOM_SUPERVISOR_CHECKPOINT="$DUP_CKPT" \
-  node "$SUPERVISOR" --detach "$DUP_DAG" --provider=codex >/dev/null 2>&1
+  node "$SUPERVISOR" --allow-dirty-repo --detach "$DUP_DAG" --provider=codex >/dev/null 2>&1
 DUP_RC=$?
 set -e
 assert_eq 'duplicate_refusal: exit' 4 "$DUP_RC"

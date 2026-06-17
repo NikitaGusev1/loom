@@ -2,8 +2,9 @@
 /* eslint-disable no-console */
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const DEFAULT_MAX_WALLCLOCK_SEC = 24 * 60 * 60;
@@ -11,6 +12,10 @@ const DEFAULT_MAX_ATTEMPTS = 100;
 const DEFAULT_CRASH_DELAY_SEC = 60;
 const DEFAULT_CRASH_DELAY_MAX_SEC = 15 * 60;
 const DEFAULT_QUOTA_DELAY_SEC = 30 * 60;
+const ACTIVE_CHECKPOINT_STATUSES = new Set(['running', 'waiting', 'starting', 'stopping']);
+const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+const ESTIMATED_SCOPES = new Set(['single-component', 'multi-file', 'cross-module']);
+const TASK_WEIGHTS = new Set(['trivial', 'standard', 'heavy']);
 
 function usage() {
   console.error(`Usage:
@@ -28,6 +33,7 @@ Day-run behavior:
   - --detach starts the supervisor in the background
   - --force-detach ignores a stale-looking active checkpoint
   - --foreground disables loom-day-run's implicit --detach
+  - --allow-dirty-repo permits starting when git status is dirty
   - --status prints checkpoint + DAG task status
   - --stop sends SIGTERM to the PID in the checkpoint
   - on macOS, detached runs use caffeinate when available
@@ -180,6 +186,7 @@ function parseArgs(argv) {
     detach: false,
     forceDetach: false,
     foreground: false,
+    allowDirtyRepo: false,
     status: false,
     stop: false,
     help: false,
@@ -190,6 +197,7 @@ function parseArgs(argv) {
     if (arg === '--detach') flags.detach = true;
     else if (arg === '--force-detach') flags.forceDetach = true;
     else if (arg === '--foreground') flags.foreground = true;
+    else if (arg === '--allow-dirty-repo') flags.allowDirtyRepo = true;
     else if (arg === '--status') flags.status = true;
     else if (arg === '--stop') flags.stop = true;
     else if (arg === '-h' || arg === '--help') flags.help = true;
@@ -224,9 +232,461 @@ function activeSupervisorPid(checkpoint) {
 
 function checkpointLooksActive(checkpoint) {
   if (!checkpoint || typeof checkpoint !== 'object') return false;
-  if (!['running', 'waiting', 'starting', 'stopping'].includes(checkpoint.status)) return false;
+  if (!ACTIVE_CHECKPOINT_STATUSES.has(checkpoint.status)) return false;
   const pid = activeSupervisorPid(checkpoint);
   return pid !== undefined && isPidAlive(pid);
+}
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isStringRecord(value) {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string');
+}
+
+function requireString(value, pathName, errors, { nonEmpty = false } = {}) {
+  if (typeof value !== 'string' || (nonEmpty && value.trim() === '')) {
+    errors.push(`${pathName} must be a${nonEmpty ? ' non-empty' : ''} string`);
+  }
+}
+
+function requireStringArray(value, pathName, errors) {
+  if (!isStringArray(value)) errors.push(`${pathName} must be an array of strings`);
+}
+
+function validateMetaShape(meta, errors) {
+  if (!isRecord(meta)) {
+    errors.push('meta must be an object');
+    return;
+  }
+
+  requireString(meta.id, 'meta.id', errors, { nonEmpty: true });
+  requireString(meta.createdAt, 'meta.createdAt', errors);
+  requireString(meta.gitCommit, 'meta.gitCommit', errors);
+  requireString(meta.branch, 'meta.branch', errors);
+
+  const source = meta.source;
+  if (!isRecord(source)) {
+    errors.push('meta.source must be an object');
+  } else {
+    if (!['jira', 'description'].includes(source.type)) errors.push('meta.source.type is invalid');
+    if (source.jiraKey !== undefined) requireString(source.jiraKey, 'meta.source.jiraKey', errors);
+    requireString(source.title, 'meta.source.title', errors, { nonEmpty: true });
+    requireString(source.description, 'meta.source.description', errors);
+    requireStringArray(source.figmaUrls, 'meta.source.figmaUrls', errors);
+    requireStringArray(source.acceptanceCriteria, 'meta.source.acceptanceCriteria', errors);
+  }
+
+  const qualityReport = meta.qualityReport;
+  if (!isRecord(qualityReport)) {
+    errors.push('meta.qualityReport must be an object');
+    return;
+  }
+  if (typeof qualityReport.iterations !== 'number') errors.push('meta.qualityReport.iterations must be a number');
+  requireStringArray(qualityReport.checksRun, 'meta.qualityReport.checksRun', errors);
+  if (typeof qualityReport.allPassed !== 'boolean') errors.push('meta.qualityReport.allPassed must be a boolean');
+  if (qualityReport.details !== undefined) {
+    if (!isRecord(qualityReport.details)) {
+      errors.push('meta.qualityReport.details must be an object');
+    } else {
+      for (const [name, detail] of Object.entries(qualityReport.details)) {
+        if (!isRecord(detail)) {
+          errors.push(`meta.qualityReport.details.${name} must be an object`);
+          continue;
+        }
+        if (typeof detail.passed !== 'boolean') {
+          errors.push(`meta.qualityReport.details.${name}.passed must be a boolean`);
+        }
+        requireString(detail.notes, `meta.qualityReport.details.${name}.notes`, errors);
+      }
+    }
+  }
+}
+
+function validateContractsShape(contracts, taskPath, errors) {
+  if (!isRecord(contracts)) {
+    errors.push(`${taskPath}.contracts must be an object`);
+    return;
+  }
+
+  if (!isRecord(contracts.inputs)) {
+    errors.push(`${taskPath}.contracts.inputs must be an object`);
+  } else {
+    for (const [name, input] of Object.entries(contracts.inputs)) {
+      if (!isRecord(input)) {
+        errors.push(`${taskPath}.contracts.inputs.${name} must be an object`);
+        continue;
+      }
+      if (input.type !== undefined) requireString(input.type, `${taskPath}.contracts.inputs.${name}.type`, errors);
+      requireString(input.source, `${taskPath}.contracts.inputs.${name}.source`, errors);
+    }
+  }
+
+  if (!isRecord(contracts.outputs)) {
+    errors.push(`${taskPath}.contracts.outputs must be an object`);
+    return;
+  }
+
+  for (const [name, output] of Object.entries(contracts.outputs)) {
+    const outputPath = `${taskPath}.contracts.outputs.${name}`;
+    if (!isRecord(output)) {
+      errors.push(`${outputPath} must be an object`);
+      continue;
+    }
+    if (output.kind === 'file') {
+      requireString(output.path, `${outputPath}.path`, errors, { nonEmpty: true });
+      if (
+        output.mediaType !== undefined &&
+        !['json', 'markdown', 'yaml', 'text', 'typescript', 'shell', 'other'].includes(output.mediaType)
+      ) {
+        errors.push(`${outputPath}.mediaType is invalid`);
+      }
+      requireString(output.description, `${outputPath}.description`, errors);
+    } else if (output.kind === 'export') {
+      requireString(output.file, `${outputPath}.file`, errors, { nonEmpty: true });
+      requireString(output.exportName, `${outputPath}.exportName`, errors, { nonEmpty: true });
+      if (!['type', 'interface', 'const', 'function', 'class', 'component'].includes(output.exportKind)) {
+        errors.push(`${outputPath}.exportKind is invalid`);
+      }
+      requireString(output.description, `${outputPath}.description`, errors);
+    } else if (output.kind === 'behavioral') {
+      requireString(output.description, `${outputPath}.description`, errors);
+    } else {
+      errors.push(`${outputPath}.kind is invalid`);
+    }
+  }
+}
+
+function validateContextShape(context, taskPath, errors) {
+  if (!isRecord(context)) {
+    errors.push(`${taskPath}.context must be an object`);
+    return;
+  }
+  requireStringArray(context.files, `${taskPath}.context.files`, errors);
+  if (context.layoutSpec !== undefined) requireString(context.layoutSpec, `${taskPath}.context.layoutSpec`, errors);
+  if (context.conventions !== undefined) requireStringArray(context.conventions, `${taskPath}.context.conventions`, errors);
+  if (context.figmaTokens !== undefined && !isStringRecord(context.figmaTokens)) {
+    errors.push(`${taskPath}.context.figmaTokens must be an object of strings`);
+  }
+
+  if (context.figmaRef !== undefined) {
+    if (!isRecord(context.figmaRef)) {
+      errors.push(`${taskPath}.context.figmaRef must be an object`);
+    } else {
+      if (context.figmaRef.nodeId !== undefined) {
+        requireString(context.figmaRef.nodeId, `${taskPath}.context.figmaRef.nodeId`, errors);
+      }
+      if (context.figmaRef.url !== undefined) requireString(context.figmaRef.url, `${taskPath}.context.figmaRef.url`, errors);
+      if (context.figmaRef.hints !== undefined) {
+        requireStringArray(context.figmaRef.hints, `${taskPath}.context.figmaRef.hints`, errors);
+      }
+    }
+  }
+
+  if (context.relatedPatterns !== undefined) {
+    if (!Array.isArray(context.relatedPatterns)) {
+      errors.push(`${taskPath}.context.relatedPatterns must be an array`);
+    } else {
+      for (const [i, pattern] of context.relatedPatterns.entries()) {
+        if (!isRecord(pattern)) {
+          errors.push(`${taskPath}.context.relatedPatterns.${i} must be an object`);
+          continue;
+        }
+        requireString(pattern.file, `${taskPath}.context.relatedPatterns.${i}.file`, errors);
+        requireString(pattern.relevance, `${taskPath}.context.relatedPatterns.${i}.relevance`, errors);
+      }
+    }
+  }
+}
+
+function validateCompletionCriteriaShape(completionCriteria, taskPath, errors) {
+  if (!isRecord(completionCriteria)) {
+    errors.push(`${taskPath}.completionCriteria must be an object`);
+    return;
+  }
+  requireStringArray(completionCriteria.automated, `${taskPath}.completionCriteria.automated`, errors);
+  requireStringArray(completionCriteria.manual, `${taskPath}.completionCriteria.manual`, errors);
+}
+
+function validateDagShape(dag) {
+  const errors = [];
+  if (!isRecord(dag)) return ['DAG must be a JSON object'];
+
+  validateMetaShape(dag.meta, errors);
+  if (!Array.isArray(dag.tasks) || dag.tasks.length === 0) errors.push('tasks must be a non-empty array');
+  if (!Array.isArray(dag.executionLayers) || dag.executionLayers.length === 0) {
+    errors.push('executionLayers must be a non-empty array');
+  }
+  if (errors.length > 0) return errors;
+
+  const taskIds = new Set();
+  const layerByTask = new Map();
+  const tasks = dag.tasks;
+  const layers = dag.executionLayers;
+
+  for (const [i, task] of tasks.entries()) {
+    const taskPath = `tasks.${i}`;
+    if (!isRecord(task)) {
+      errors.push(`${taskPath} must be an object`);
+      continue;
+    }
+    if (typeof task.id !== 'string' || !TASK_ID_PATTERN.test(task.id)) {
+      errors.push(`${taskPath}.id must contain only alphanumeric, hyphen, or underscore characters`);
+      continue;
+    }
+    if (taskIds.has(task.id)) errors.push(`duplicate task id "${task.id}"`);
+    taskIds.add(task.id);
+    requireString(task.name, `${taskPath}.name`, errors, { nonEmpty: true });
+    requireString(task.description, `${taskPath}.description`, errors);
+    requireStringArray(task.dependencies, `${taskPath}.dependencies`, errors);
+    validateContractsShape(task.contracts, taskPath, errors);
+    validateContextShape(task.context, taskPath, errors);
+    validateCompletionCriteriaShape(task.completionCriteria, taskPath, errors);
+    if (!ESTIMATED_SCOPES.has(task.estimatedScope)) {
+      errors.push(`task "${task.id}" estimatedScope is invalid`);
+    }
+    if (!TASK_WEIGHTS.has(task.weight)) errors.push(`task "${task.id}" weight is invalid`);
+  }
+
+  for (const layer of layers) {
+    if (!isRecord(layer) || !Number.isInteger(layer.layer) || layer.layer < 0 || !Array.isArray(layer.taskIds)) {
+      errors.push('execution layer must include layer >= 0 and taskIds array');
+      continue;
+    }
+    if (typeof layer.description !== 'string') errors.push(`execution layer ${layer.layer} description must be a string`);
+    if (layer.taskIds.length === 0) errors.push(`execution layer ${layer.layer} taskIds must be non-empty`);
+    for (const taskId of layer.taskIds) {
+      if (typeof taskId !== 'string') {
+        errors.push(`execution layer ${layer.layer} taskIds must contain only strings`);
+        continue;
+      }
+      if (!taskIds.has(taskId)) {
+        errors.push(`execution layer ${layer.layer} references unknown task "${taskId}"`);
+        continue;
+      }
+      if (layerByTask.has(taskId)) {
+        errors.push(`task "${taskId}" appears in multiple execution layers`);
+        continue;
+      }
+      layerByTask.set(taskId, layer.layer);
+    }
+  }
+
+  for (const task of tasks) {
+    if (!isRecord(task) || typeof task.id !== 'string') continue;
+    if (!layerByTask.has(task.id)) errors.push(`task "${task.id}" is not assigned to any execution layer`);
+    if (!isStringArray(task.dependencies)) continue;
+    for (const depId of task.dependencies) {
+      if (!taskIds.has(depId)) {
+        errors.push(`task "${task.id}" depends on unknown task "${depId}"`);
+        continue;
+      }
+      const depLayer = layerByTask.get(depId);
+      const taskLayer = layerByTask.get(task.id);
+      if (depLayer !== undefined && taskLayer !== undefined && depLayer >= taskLayer) {
+        errors.push(`task "${task.id}" depends on "${depId}" in the same or later layer`);
+      }
+    }
+  }
+
+  const visiting = new Set();
+  const visited = new Set();
+  const taskById = new Map(tasks.filter(isRecord).map((task) => [task.id, task]));
+  const visit = (id, pathIds) => {
+    if (visited.has(id) || !taskById.has(id)) return;
+    if (visiting.has(id)) {
+      errors.push(`cycle detected in DAG: ${[...pathIds, id].join(' -> ')}`);
+      return;
+    }
+    visiting.add(id);
+    const deps = taskById.get(id).dependencies;
+    if (Array.isArray(deps)) {
+      for (const depId of deps) visit(depId, [...pathIds, id]);
+    }
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const id of taskIds) visit(id, []);
+
+  return errors;
+}
+
+function runProbe(command, args, options = {}) {
+  return spawnSync(command, args, {
+    cwd: options.cwd || process.cwd(),
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: options.timeoutMs || 10_000,
+  });
+}
+
+function commandSpawned(result) {
+  return !result.error || result.error.code !== 'ENOENT';
+}
+
+function resultOutput(result) {
+  return `${result.stderr || ''}${result.stdout || ''}`.trim();
+}
+
+function resultFailure(result) {
+  return resultOutput(result) || result.error?.message || 'unknown error';
+}
+
+function providerFromArgs(userArgs) {
+  const raw = userArgs.find((arg) => arg.startsWith('--provider='));
+  const provider = raw ? raw.split('=')[1] : 'codex';
+  return provider === 'claude' ? 'claude' : 'codex';
+}
+
+function providerBin(provider) {
+  return provider === 'claude' ? process.env.CLAUDE_BIN || 'claude' : process.env.CODEX_BIN || 'codex';
+}
+
+function checkDagFile(dagPath, errors) {
+  const dag = readJson(dagPath);
+  if (!dag) {
+    errors.push(`DAG validation failed: ${dagPath} is not readable JSON`);
+    return;
+  }
+  const validationErrors = validateDagShape(dag);
+  for (const error of validationErrors) errors.push(`DAG validation failed: ${error}`);
+}
+
+function checkCommand(name, command, args, errors, warnings) {
+  const result = runProbe(command, args, { timeoutMs: 5_000 });
+  if (result.error) {
+    if (result.error.code === 'ENOENT') {
+      errors.push(`${name} is not available: ${command}`);
+    } else if (result.error.code === 'ETIMEDOUT') {
+      warnings.push(`${name} probe timed out: ${command} ${args.join(' ')}`);
+    } else {
+      errors.push(`${name} probe failed: ${command} (${result.error.message})`);
+    }
+  }
+  return result;
+}
+
+function checkExecutablePath(name, command, args, errors, warnings) {
+  if (command.includes(path.sep) || fs.existsSync(command)) {
+    try {
+      fs.accessSync(command, fs.constants.X_OK);
+      return { status: 0 };
+    } catch (err) {
+      errors.push(`${name} is not executable: ${command} (${err.message})`);
+      return { status: 1, error: err };
+    }
+  }
+  return checkCommand(name, command, args, errors, warnings);
+}
+
+function checkDagLock(dagPath, errors, warnings) {
+  const lockPath = `${dagPath}.lock`;
+  if (!fs.existsSync(lockPath)) return;
+
+  const removeStaleLock = () => {
+    warnings.push(`stale DAG lock detected and removed: ${lockPath}`);
+    fs.rmSync(lockPath, { force: true });
+  };
+
+  let pid;
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf8');
+    pid = JSON.parse(raw).pid;
+  } catch {
+    removeStaleLock();
+    return;
+  }
+
+  if (isPositiveInteger(pid) && isPidAlive(pid)) {
+    errors.push(`DAG lock is held by running pid ${pid}: ${lockPath}`);
+    return;
+  }
+
+  removeStaleLock();
+}
+
+function checkSupervisorCheckpoint(checkpointPath, warnings) {
+  const checkpoint = readJson(checkpointPath);
+  if (!checkpoint || !ACTIVE_CHECKPOINT_STATUSES.has(checkpoint.status)) return;
+  const pid = activeSupervisorPid(checkpoint);
+  if (pid && !isPidAlive(pid)) warnings.push(`stale supervisor PID ${pid} in ${checkpointPath}`);
+}
+
+function checkGitRepo({ allowDirtyRepo, errors, warnings }) {
+  const gitVersion = checkCommand('git', 'git', ['--version'], errors, warnings);
+  if (!commandSpawned(gitVersion)) return;
+
+  const root = runProbe('git', ['rev-parse', '--show-toplevel']);
+  if (root.status !== 0) {
+    errors.push('current directory is not inside a git repository');
+    return;
+  }
+
+  const status = runProbe('git', ['status', '--porcelain']);
+  if (status.status !== 0) {
+    errors.push(`git status failed: ${resultFailure(status)}`);
+    return;
+  }
+
+  if (status.stdout.trim()) {
+    if (allowDirtyRepo) {
+      warnings.push('git working tree is dirty; proceeding because --allow-dirty-repo is set');
+    } else {
+      errors.push('git working tree is dirty; commit/stash changes or pass --allow-dirty-repo');
+      return;
+    }
+  }
+
+  const tmpParent = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-preflight-'));
+  const wtPath = path.join(tmpParent, 'worktree');
+  try {
+    const add = runProbe('git', ['worktree', 'add', '--detach', wtPath, 'HEAD'], { timeoutMs: 15_000 });
+    if (add.status !== 0) {
+      errors.push(`git worktree probe failed: ${resultFailure(add)}`);
+      return;
+    }
+    const remove = runProbe('git', ['worktree', 'remove', '--force', wtPath], { timeoutMs: 15_000 });
+    if (remove.status !== 0) {
+      warnings.push(`git worktree cleanup failed: ${resultFailure(remove)}`);
+    }
+  } finally {
+    fs.rmSync(tmpParent, { recursive: true, force: true });
+  }
+}
+
+function runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo }) {
+  const errors = [];
+  const warnings = [];
+
+  checkDagFile(dagPath, errors);
+  checkDagLock(dagPath, errors, warnings);
+  checkSupervisorCheckpoint(checkpointPath, warnings);
+
+  const dagExecutor = process.env.DAG_EXECUTOR_BIN || 'dag-executor';
+  checkExecutablePath('dag-executor', dagExecutor, ['--help'], errors, warnings);
+
+  const provider = providerFromArgs(userArgs);
+  const modelBin = providerBin(provider);
+  const providerResult = checkCommand(provider, modelBin, ['--version'], errors, warnings);
+  if (commandSpawned(providerResult) && providerResult.status !== 0) {
+    warnings.push(`${provider} smoke check returned ${providerResult.status}: ${resultOutput(providerResult)}`);
+  }
+
+  checkGitRepo({ allowDirtyRepo, errors, warnings });
+
+  for (const warning of warnings) console.error(`[loom-supervisor] preflight warning: ${warning}`);
+  if (errors.length === 0) {
+    console.error('[loom-supervisor] preflight ok');
+    return true;
+  }
+
+  for (const error of errors) console.error(`[loom-supervisor] preflight failed: ${error}`);
+  return false;
 }
 
 function caffeinateCommand() {
@@ -348,7 +808,7 @@ function showStatus({ dagPath, checkpointPath }) {
   return statusExitCode(status, counts, false);
 }
 
-function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLogPath, forceDetach }) {
+function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLogPath, forceDetach, allowDirtyRepo }) {
   const existing = readJson(checkpointPath);
   if (!forceDetach && checkpointLooksActive(existing)) {
     const pid = activeSupervisorPid(existing);
@@ -357,6 +817,8 @@ function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLog
     console.error('[loom-supervisor] use --force-detach only after verifying the old run is stale');
     return 4;
   }
+
+  if (!runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo })) return 1;
 
   fs.mkdirSync(path.dirname(detachLogPath), { recursive: true });
   fs.mkdirSync(logDir, { recursive: true });
@@ -386,7 +848,10 @@ function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLog
     child = spawn(command, args, {
       detached: true,
       stdio: ['ignore', fd, fd],
-      env: process.env,
+      env: {
+        ...process.env,
+        ...(allowDirtyRepo && { LOOM_SUPERVISOR_ALLOW_DIRTY_REPO: '1' }),
+      },
     });
   } finally {
     fs.closeSync(fd);
@@ -462,6 +927,7 @@ async function main(argv) {
   }
 
   const { checkpointPath, logDir, detachLogPath } = resolvePaths(dagPath);
+  const allowDirtyRepo = flags.allowDirtyRepo || process.env.LOOM_SUPERVISOR_ALLOW_DIRTY_REPO === '1';
   const defaultStatus = invokedAs === 'loom-status';
   if (flags.status || defaultStatus) return showStatus({ dagPath, checkpointPath });
   if (flags.stop) return stopSupervisor({ dagPath, checkpointPath });
@@ -475,8 +941,11 @@ async function main(argv) {
       logDir,
       detachLogPath,
       forceDetach: flags.forceDetach,
+      allowDirtyRepo,
     });
   }
+
+  if (!runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo })) return 1;
 
   const maxWallclockSec = envInt('LOOM_SUPERVISOR_MAX_WALLCLOCK_SEC', DEFAULT_MAX_WALLCLOCK_SEC);
   const maxAttempts = envInt('LOOM_SUPERVISOR_MAX_ATTEMPTS', DEFAULT_MAX_ATTEMPTS);

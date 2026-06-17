@@ -45,9 +45,11 @@ Acceptance criteria:
 - Shows the latest pause reason when paused.
 - Exits non-zero when the run is blocked or missing.
 
-### 3. Stronger Preflight Checks
+### 3. Stronger Preflight Checks — Complete
 
 Add preflight validation before day-run mode starts.
+
+Status: complete. `loom-supervisor` now validates the DAG, checks `dag-executor`, provider CLI, and `git`, probes git worktree creation, detects stale DAG locks and supervisor PID files, blocks dirty repos unless `--allow-dirty-repo` is passed, and runs a cheap provider `--version` smoke check.
 
 Acceptance criteria:
 
