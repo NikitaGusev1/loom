@@ -128,6 +128,16 @@ export interface TaskState {
   merged?: boolean;
 }
 
+export interface BacklogBlockedTask {
+  taskId: string;
+  kind: 'permanent-failure' | 'dependency-blocked';
+  /** Immediate task ids that prevent this task from becoming runnable. */
+  blockedBy: string[];
+  /** Permanent failed task ids at the root of the blocking chain. */
+  rootFailures: string[];
+  reason?: string;
+}
+
 export interface LayerState {
   startedAt: string | null;
   completedAt: string | null;
@@ -143,6 +153,8 @@ export interface ExecutionState {
   config: ExecutorConfig;
   layers: Record<string, LayerState>;
   tasks: Record<string, TaskState>;
+  /** Present on paused backlog runs when permanent failures block remaining tasks. */
+  blockedTasks?: BacklogBlockedTask[];
   /** Marks a state.json written by saveState as a derived cache artifact. */
   derived?: true;
 }
@@ -163,6 +175,10 @@ export interface ExecutorConfig {
   verifyCommands?: { test?: string; lint?: string; typecheck?: string };
   /** `--no-verify` — disables both verification tiers entirely. */
   disableVerification?: boolean;
+  /** Optional curated memory file to inject into spawned task prompts. Defaults to .dag-executor/memory.md. */
+  projectMemoryPath?: string;
+  /** `--no-memory` — disables project-memory prompt injection even when the default file exists. */
+  disableMemory?: boolean;
 }
 
 export interface ExecuteOptions {

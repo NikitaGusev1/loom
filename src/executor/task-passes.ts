@@ -8,6 +8,7 @@ import type { DAGTask, ExecutionState, ExecutorConfig, TaskUsage } from '../type
 import type { DagEvent } from '../events/types.js';
 import type { Logger } from '../logger.js';
 import type { SessionTrace } from '../claude-cli.js';
+import type { ProjectMemory } from '../memory.js';
 import { toErrorMessage } from '../exec.js';
 import { buildTaskPrompt, VERIFICATION_FIX_NOTICE } from '../prompt.js';
 import { resolveOutputFiles } from '../contracts.js';
@@ -34,6 +35,7 @@ interface ExecuteTaskPassesArgs {
   verifyCommands?: ResolvedCommands;
   /** Top-level abort signal (from SIGINT handler). Passed through to runQuery for cooperative cancellation. */
   signal?: AbortSignal;
+  projectMemory?: ProjectMemory | null;
 }
 
 export const executeTaskPasses = async ({
@@ -47,6 +49,7 @@ export const executeTaskPasses = async ({
   layerNum,
   verifyCommands = {},
   signal,
+  projectMemory,
 }: ExecuteTaskPassesArgs): Promise<{ usage?: TaskUsage; trace?: SessionTrace; failed: boolean }> => {
   // Ensure .claude/ai/ exists in worktrees (gitignored)
   mkdirSync(join(cwd, '.claude/ai'), { recursive: true });
@@ -60,7 +63,7 @@ export const executeTaskPasses = async ({
   });
 
   try {
-    const prompt = buildTaskPrompt(task);
+    const prompt = buildTaskPrompt(task, { projectMemory });
     const { usage, trace } = await runQuery(prompt, task.weight, config, {
       cwd,
       signal: deadline.signal,

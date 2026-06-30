@@ -31,6 +31,7 @@ import { executeTaskPasses } from './executor/task-passes.js';
 import { executeTrivialBatch } from './executor/trivial-batch.js';
 import { settleNoOpGate } from './executor/noop-gate.js';
 import { getCurrentBranch, getFilesModified } from './executor/git-ops.js';
+import { describeProjectMemory, loadProjectMemory } from './memory.js';
 
 export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionState> => {
   const { dag, config, signal, resume, rerunTaskIds } = options;
@@ -39,6 +40,11 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
   const eventLogPath = getEventLogPath(config.dagPath);
   const dagId = dag.meta.id;
   const taskMap = new Map<string, DAGTask>(dag.tasks.map((t) => [t.id, t]));
+  const projectMemory = loadProjectMemory({
+    cwd: process.cwd(),
+    path: config.projectMemoryPath,
+    disabled: config.disableMemory,
+  });
 
   let state: ExecutionState;
 
@@ -152,6 +158,8 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
         `${absent.length ? ` (skipping: ${absent.join(', ')})` : ''}.`,
     );
   }
+  const memoryStatus = describeProjectMemory(projectMemory, config.disableMemory);
+  if (memoryStatus) log.info(memoryStatus);
 
   // Tier-2 merged-whole verification for a layer (post-merge, on main, where
   // node_modules exists). Returns a pause state on failure, null on pass/skip.
@@ -330,6 +338,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
         layerNum: layer.layer,
         signal,
         verifyCommands,
+        projectMemory,
       });
       if (!batchResult.success) {
         log.error(`Layer ${layer.layer} trivial batch failed. State saved. Resume with --resume.`);
@@ -408,6 +417,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
               layerNum: layer.layer,
               verifyCommands,
               signal,
+              projectMemory,
             });
             if (failed) throw new Error(state.tasks[task.id]?.error ?? 'Pass execution failed');
 

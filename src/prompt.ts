@@ -1,4 +1,5 @@
 import type { ContractOutput, DAGTask } from './types.js';
+import type { ProjectMemory } from './memory.js';
 
 // Prepended to the failure detail when re-invoking a session whose changes failed
 // automated verification (Tier-1). The executor runs verification itself after the
@@ -22,6 +23,21 @@ const renderOutputLine = (name: string, out: ContractOutput): string => {
       return _exhaustive;
     }
   }
+};
+
+const renderProjectMemory = (memory: ProjectMemory | null | undefined): string[] => {
+  if (!memory) return [];
+
+  return [
+    '## Curated Project Memory',
+    `Source: \`${memory.path}\`${memory.truncated ? ' (truncated)' : ''}`,
+    '',
+    'Selected lessons from prior DAG runs. Apply only when relevant; current task instructions',
+    'and source code win on conflicts. Do not append raw logs or unrelated history to your result.',
+    '',
+    memory.content,
+    '',
+  ];
 };
 
 const buildPhaseZero = (task: DAGTask): string[] => {
@@ -155,7 +171,11 @@ const buildVerificationProtocol = (task: DAGTask): string[] => {
   return sections;
 };
 
-export const buildTaskPrompt = (task: DAGTask): string => {
+interface PromptOptions {
+  projectMemory?: ProjectMemory | null;
+}
+
+export const buildTaskPrompt = (task: DAGTask, options: PromptOptions = {}): string => {
   const sections: string[] = [];
 
   sections.push(
@@ -172,6 +192,8 @@ export const buildTaskPrompt = (task: DAGTask): string => {
     'Read `.claude/references/design-system-tokens.md` if your task involves UI/styling — it maps Figma tokens to codebase theme tokens.',
     '',
   );
+
+  sections.push(...renderProjectMemory(options.projectMemory));
 
   // Task
   sections.push(`## Task: ${task.name}`, task.description, '');
@@ -275,7 +297,7 @@ export const buildTaskPrompt = (task: DAGTask): string => {
   return sections.join('\n');
 };
 
-export const buildBatchedTrivialPrompt = (tasks: DAGTask[]): string => {
+export const buildBatchedTrivialPrompt = (tasks: DAGTask[], options: PromptOptions = {}): string => {
   const sections: string[] = [];
 
   sections.push(
@@ -288,6 +310,8 @@ export const buildBatchedTrivialPrompt = (tasks: DAGTask[]): string => {
     'verify each declared output exists on disk and contains the required changes.',
     '',
   );
+
+  sections.push(...renderProjectMemory(options.projectMemory));
 
   for (const [i, task] of tasks.entries()) {
     sections.push(`## Task ${i + 1}: ${task.name}`);

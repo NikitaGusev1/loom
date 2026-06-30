@@ -64,6 +64,8 @@ const testCmd = getArgValue('--test-cmd');
 const lintCmd = getArgValue('--lint-cmd');
 const typecheckCmd = getArgValue('--typecheck-cmd');
 const noVerify = args.includes('--no-verify');
+const memoryPath = getArgValue('--memory');
+const noMemory = args.includes('--no-memory');
 const verifyCommands =
   testCmd || lintCmd || typecheckCmd
     ? {
@@ -108,6 +110,7 @@ if (!dagPath) {
       '  [--rerun=id1,id2]',
       '  [--force-worktree-reset=id1,id2] [--allow-stale-self-host]',
       '  [--test-cmd=<cmd>] [--lint-cmd=<cmd>] [--typecheck-cmd=<cmd>] [--no-verify]',
+      '  [--memory=<path>] [--no-memory]',
     ].join('\n'),
   );
   process.exit(1);
@@ -153,6 +156,8 @@ const config: ExecutorConfig = {
   dagPath: resolve(dagPath),
   dryRun,
   forceWorktreeResetTaskIds,
+  ...(memoryPath && { projectMemoryPath: memoryPath }),
+  ...(noMemory && { disableMemory: true }),
   ...(verifyCommands && { verifyCommands }),
   ...(noVerify && { disableVerification: true }),
 };

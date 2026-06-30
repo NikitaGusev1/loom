@@ -172,6 +172,29 @@ describe('reduce — dag.paused', () => {
     assert.equal(next.status, 'paused');
     assert.equal(next.currentLayer, 1);
   });
+
+  it('stores backlog blocked-task metadata when present', () => {
+    const event: DagEvent = {
+      kind: 'dag.paused',
+      schemaVersion: V,
+      ts,
+      dagPath: '/test/dag.json',
+      dagId: 'test-dag',
+      reason: 'No ready backlog tasks',
+      currentLayer: 1,
+      blockedTasks: [
+        {
+          taskId: 'task-b',
+          kind: 'dependency-blocked',
+          blockedBy: ['task-a'],
+          rootFailures: ['task-a'],
+          reason: 'depends on blocked task(s): task-a',
+        },
+      ],
+    };
+    const next = reduce(init(), event);
+    assert.deepEqual(next.blockedTasks, event.blockedTasks);
+  });
 });
 
 describe('reduce — dag.aborted', () => {

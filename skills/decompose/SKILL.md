@@ -75,6 +75,13 @@ Example: /decompose "Add a weekend toggle to the employee calendar"
 
 ### Step 2: Gather Context
 
+If `.dag-executor/memory.md` exists, read it before spawning research agents.
+Treat it as curated project memory: selected lessons from prior DAG runs,
+common failure modes, estimate corrections, or conventions that held in
+practice. Include only relevant excerpts in the context bundle and cap the
+included memory to roughly 6,000 characters. Never paste raw event logs,
+state snapshots, or unrelated history into the bundle.
+
 **If `--plan` was provided:**
 
 1. Read the plan file at the given path
@@ -110,6 +117,7 @@ Context Bundle:
 - figmaContext: { tokens, layout, components } (if applicable)
 - layoutSpec: { Component Hierarchy and Spacing & Layout tables from Figma analysis }
 - conventions: { project conventions relevant to this task }
+- projectMemory: { relevant curated lessons from `.dag-executor/memory.md`, if present }
 ```
 
 **CRITICAL**: If the Figma research produced a Component Hierarchy (indented tree of
@@ -140,6 +148,10 @@ Decompose this task into a dependency graph of agent-sized subtasks.
 
 ## Conventions
 [Project conventions derived from root CLAUDE.md and research — the concrete rules that constrain how tasks are implemented. Capture the ones that apply to THIS project, e.g.: module/export style, import conventions (path aliases vs relative), test file naming and location, styling approach, error-handling patterns. List the actual rules, not a generic checklist.]
+
+## Curated Project Memory (if present)
+[Paste only relevant excerpts from `.dag-executor/memory.md`. Current source task,
+codebase research, and source code win on conflicts.]
 
 Produce the full JSON DAG following the decomposition schema.
 ```

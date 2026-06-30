@@ -59,6 +59,6 @@ CLI exit codes: 0 completed, 2 paused (resume with `--resume`), 1 error.
 
 ## Documentation accuracy
 
-`CHANGELOG.md` 0.2.0 removed `--failure-model`, `--migrate-state`, and `--validate-events` (README's stale migration section + flag tables were dropped in a later docs pass). Current flag surface — trust `src/index.ts`: `--resume`, `--dry-run`, `--slots`, `--model`, `--rerun`, `--force-worktree-reset`, `--test-cmd`, `--lint-cmd`, `--typecheck-cmd`, `--no-verify`.
+`CHANGELOG.md` 0.2.0 removed `--failure-model`, `--migrate-state`, and `--validate-events` (README's stale migration section + flag tables were dropped in a later docs pass). Current flag surface — trust `src/index.ts`: `--resume`, `--dry-run`, `--slots`, `--model`, `--rerun`, `--force-worktree-reset`, `--test-cmd`, `--lint-cmd`, `--typecheck-cmd`, `--no-verify`, `--memory=<path>`, `--no-memory`.
 
 Under 0.x versioning, a MINOR bump signals a breaking CLI-surface change.

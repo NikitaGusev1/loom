@@ -76,6 +76,8 @@ Acceptance criteria:
 
 Improve backlog semantics so one permanently failed task does not unnecessarily stop unrelated ready work.
 
+Status: implemented in `src/backlog-readiness.ts`; pause events/state now include blocked-task metadata for direct permanent failures and dependency-blocked descendants.
+
 Acceptance criteria:
 
 - Distinguishes dependency-blocking failures from independent failures.

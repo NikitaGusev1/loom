@@ -19,6 +19,8 @@ The entry point parses positional and keyword arguments:
 | `--model=opus\|sonnet\|haiku`    | Override default + heavy model                       |
 | `--force-worktree-reset=id1,id2` | Force-recreate worktrees for listed tasks            |
 | `--slots`                        | Print machine-wide slot snapshot and exit            |
+| `--memory=<path>`                | Use a specific curated project memory file           |
+| `--no-memory`                    | Disable curated project memory prompt injection      |
 
 After parsing, it reads the DAG file, validates it with Zod (`validateDAG`), builds an `ExecutorConfig`, installs a cooperative SIGINT handler (first Ctrl-C sets AbortController; second force-exits), then calls `executeDAG`.
 

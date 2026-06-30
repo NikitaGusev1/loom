@@ -1,7 +1,7 @@
 // DAG Event types — discriminated union on `kind`
 // Every event carries schemaVersion and ts (ISO-8601) at the top level.
 
-import type { TaskUsage, TaskState, ExecutionState } from '../types.js';
+import type { BacklogBlockedTask, TaskUsage, TaskState, ExecutionState } from '../types.js';
 import type { VerifyKind } from '../verify/detect.js';
 
 export const DAG_EVENT_SCHEMA_VERSION = 1 as const;
@@ -47,6 +47,7 @@ export interface DagPausedEvent extends EventBase<'dag.paused'> {
   dagId: string;
   reason: string;
   currentLayer: number;
+  blockedTasks?: BacklogBlockedTask[];
 }
 
 export interface DagAbortedEvent extends EventBase<'dag.aborted'> {

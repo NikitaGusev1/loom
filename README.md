@@ -83,6 +83,12 @@ DAG JSON
 
 On resume, the executor reads the event log from disk and replays it to reconstruct state. Nothing is lost if the process crashes mid-layer.
 
+## Project Memory
+
+For curated lessons that should carry across DAG runs, add `.dag-executor/memory.md` in the target repo. The executor loads it by default, caps it to a small prompt-safe block, and injects it into spawned task sessions as "Curated Project Memory". Use `--memory=<path>` to point at a different curated file, or `--no-memory` to disable memory injection for a run.
+
+Keep this file summarized and selective: useful conventions, recurring failure modes, estimate corrections, or lessons from prior event logs. Do not paste raw `.events.jsonl` or `.state.json` content into it.
+
 ---
 
 ## Event Log Format
@@ -133,7 +139,7 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 {"kind":"layer.completed-with-failures","schemaVersion":1,"ts":"2026-05-19T12:20:00.000Z","dagId":"decomp","layer":1,"taskIds":["task-c","task-d"],"failedTaskIds":["task-c"],"durationMs":1200000}
 {"kind":"layer.failed","schemaVersion":1,"ts":"2026-05-19T12:20:00.000Z","dagId":"decomp","layer":1,"taskIds":["task-c","task-d"],"failedTaskIds":["task-c","task-d"],"reason":"all tasks in layer failed permanently"}
 {"kind":"contract.broken","schemaVersion":1,"ts":"2026-05-19T12:03:00.000Z","dagId":"decomp","taskId":"task-b","inputName":"auth-types","expectedFrom":"task-a","outputName":"auth-types","outputType":"file","reason":"output file src/auth/types.ts not found"}
-{"kind":"dag.paused","schemaVersion":1,"ts":"2026-05-19T12:20:01.000Z","dagId":"decomp","dagPath":"/repo/.claude/ai/decomp.json","reason":"layer 1 failed with permanent failures","currentLayer":1}
+{"kind":"dag.paused","schemaVersion":1,"ts":"2026-05-19T12:20:01.000Z","dagId":"decomp","dagPath":"/repo/.claude/ai/decomp.json","reason":"layer 1 failed with permanent failures","currentLayer":1,"blockedTasks":[{"taskId":"task-d","kind":"dependency-blocked","blockedBy":["task-c"],"rootFailures":["task-c"],"reason":"depends on blocked task(s): task-c"}]}
 {"kind":"dag.aborted","schemaVersion":1,"ts":"2026-05-19T12:05:00.000Z","dagId":"decomp","dagPath":"/repo/.claude/ai/decomp.json","reason":"SIGINT","signal":"SIGINT"}
 {"kind":"dag.base-moved","schemaVersion":1,"ts":"2026-05-19T12:10:00.000Z","dagId":"decomp","dagPath":"/repo/.claude/ai/decomp.json","previousCommit":"abc123","newCommit":"def456","branch":"feature/my-work"}
 {"kind":"dag.completed","schemaVersion":1,"ts":"2026-05-19T12:30:00.000Z","dagId":"decomp","dagPath":"/repo/.claude/ai/decomp.json","totalTasks":4,"succeededTasks":4,"failedTasks":0,"durationMs":1800000,"finalState":{"status":"completed"}}
@@ -149,7 +155,7 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 | ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------- |
 | `dag.started`    | Executor begins a fresh or resumed run            | `dagPath`, `dagId`, `branch`, `resume`                                                        | Reducer (sets run start time) |
 | `dag.completed`  | All layers finished (success or partial)          | `dagPath`, `dagId`, `totalTasks`, `succeededTasks`, `failedTasks`, `durationMs`, `finalState` | Reducer, human                |
-| `dag.paused`     | Layer fails and executor stops (resumable)        | `dagPath`, `dagId`, `reason`, `currentLayer`                                                  | Reducer, human                |
+| `dag.paused`     | Layer/backlog fails and executor stops (resumable) | `dagPath`, `dagId`, `reason`, `currentLayer`, `blockedTasks?`                                  | Reducer, human                |
 | `dag.aborted`    | SIGINT / SIGTERM received or fatal internal error | `dagPath`, `dagId`, `reason`, `signal`                                                        | Reducer, human                |
 | `dag.base-moved` | Base branch HEAD changed between layer runs       | `dagPath`, `dagId`, `previousCommit`, `newCommit`, `branch`                                   | Reducer (abort trigger)       |
 
@@ -308,19 +314,21 @@ Stale worktrees from a previous run are force-removed before creating a new one 
 dag-executor <decomposition.json> [flags]
 ```
 
-| Flag                             | Default  | Description                                                                                      |
-| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `--resume`                       | false    | Resume a paused run from the event log                                                           |
-| `--dry-run`                      | false    | Print estimated task costs and exit without executing                                            |
-| `--backlog`                      | false    | Run dependency-ready tasks from the DAG as a persistent backlog instead of strict layer barriers |
-| `--slots`                        | false    | Print machine-wide slot snapshot and exit (no DAG argument needed)                               |
-| `--model=opus\|sonnet\|haiku`    | sonnet   | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
-| `--rerun=id1,id2`                | —        | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
-| `--force-worktree-reset=id1,id2` | —        | Allow clobbering unmerged branches for the listed task IDs                                       |
-| `--test-cmd=<cmd>`               | detected | Override the verification test command (else auto-detected from `package.json`)                  |
-| `--lint-cmd=<cmd>`               | detected | Override the verification lint command                                                           |
-| `--typecheck-cmd=<cmd>`          | detected | Override the verification typecheck command                                                      |
-| `--no-verify`                    | false    | Disable both verification tiers entirely                                                         |
+| Flag                             | Default                    | Description                                                                                      |
+| -------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
+| `--resume`                       | false                      | Resume a paused run from the event log                                                           |
+| `--dry-run`                      | false                      | Print estimated task costs and exit without executing                                            |
+| `--backlog`                      | false                      | Run dependency-ready tasks from the DAG as a persistent backlog instead of strict layer barriers |
+| `--slots`                        | false                      | Print machine-wide slot snapshot and exit (no DAG argument needed)                               |
+| `--model=opus\|sonnet\|haiku`    | sonnet                     | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
+| `--rerun=id1,id2`                | —                          | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
+| `--force-worktree-reset=id1,id2` | —                          | Allow clobbering unmerged branches for the listed task IDs                                       |
+| `--test-cmd=<cmd>`               | detected                   | Override the verification test command (else auto-detected from `package.json`)                  |
+| `--lint-cmd=<cmd>`               | detected                   | Override the verification lint command                                                           |
+| `--typecheck-cmd=<cmd>`          | detected                   | Override the verification typecheck command                                                      |
+| `--no-verify`                    | false                      | Disable both verification tiers entirely                                                         |
+| `--memory=<path>`                | `.dag-executor/memory.md`  | Use a specific curated project memory file for task prompts                                      |
+| `--no-memory`                    | false                      | Disable curated project memory prompt injection                                                  |
 
 ### Verification gates
 
@@ -328,7 +336,7 @@ After a task's session, the executor runs the target repo's **detected** test / 
 
 ### Backlog mode
 
-`--backlog` uses the same DAG file and event log, but treats the DAG as a persistent task backlog. On each loop it finds tasks whose dependencies are completed, runs the ready set in worktrees, merges successful work, runs merged-main verification, and repeats until the backlog is complete or blocked.
+`--backlog` uses the same DAG file and event log, but treats the DAG as a persistent task backlog. On each loop it finds tasks whose dependencies are completed, runs the ready set in worktrees, merges successful work, runs merged-main verification, and repeats until the backlog is complete or no runnable task remains. Permanent failures block only their dependency descendants; unrelated ready tasks continue. When no runnable task remains, `dag.paused.blockedTasks` and `.state.json.blockedTasks` distinguish direct `permanent-failure` tasks from transitive `dependency-blocked` tasks.
 
 Resume is still event-log based:
 

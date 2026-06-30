@@ -33,6 +33,8 @@ Spawned task sessions and the decomposer start cold every run — nothing learne
 
 **Constraint:** must not bloat task prompts — memory has to be summarised/curated, not appended raw. The event logs already hold the raw material; the open question is the curation step.
 
+**Progress 2026-06-30:** first curated-memory slice shipped. `dag-executor` now loads `.dag-executor/memory.md` by default (or `--memory=<path>`, disabled with `--no-memory`), caps it, and injects it into spawned task prompts and trivial batches as a conflict-aware "Curated Project Memory" section. `/decompose` now reads the same file into its context bundle when present. Still open: automatic event-log curation/summarization into that memory file.
+
 ---
 
 ## Idea: replace the slot semaphore with p-limit / p-queue

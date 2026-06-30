@@ -16,6 +16,7 @@ const ACTIVE_CHECKPOINT_STATUSES = new Set(['running', 'waiting', 'starting', 's
 const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const ESTIMATED_SCOPES = new Set(['single-component', 'multi-file', 'cross-module']);
 const TASK_WEIGHTS = new Set(['trivial', 'standard', 'heavy']);
+const EMPTY_PAUSE = { reason: '', blockedTasks: [] };
 
 function usage() {
   console.error(`Usage:
@@ -152,16 +153,39 @@ function appendStatus(checkpointPath, patch) {
   return next;
 }
 
-function latestPauseReason(dagPath) {
+function latestPause(dagPath) {
   const events = readJsonLines(eventLogPathFor(dagPath));
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
-    if (event && event.kind === 'dag.paused' && typeof event.reason === 'string') return event.reason;
+    if (event && event.kind === 'dag.paused' && typeof event.reason === 'string') {
+      return {
+        reason: event.reason,
+        blockedTasks: Array.isArray(event.blockedTasks) ? event.blockedTasks : [],
+      };
+    }
   }
 
   const state = readJson(statePathFor(dagPath));
-  if (!state || state.status !== 'paused') return '';
-  return typeof state.reason === 'string' ? state.reason : '';
+  if (!state || state.status !== 'paused') return EMPTY_PAUSE;
+  return {
+    reason: typeof state.reason === 'string' ? state.reason : '',
+    blockedTasks: Array.isArray(state.blockedTasks) ? state.blockedTasks : [],
+  };
+}
+
+function formatBlockedTasks(blockedTasks) {
+  if (!Array.isArray(blockedTasks) || blockedTasks.length === 0) return '';
+  return blockedTasks
+    .map((task) => {
+      const id = typeof task?.taskId === 'string' ? task.taskId : 'unknown';
+      const kind = typeof task?.kind === 'string' ? task.kind : 'blocked';
+      let blockedBy = '';
+      if (Array.isArray(task?.blockedBy) && task.blockedBy.length > 0) {
+        blockedBy = `<-${task.blockedBy.join(',')}`;
+      }
+      return `${id}:${kind}${blockedBy}`;
+    })
+    .join(' ');
 }
 
 function isQuotaPause(reason) {
@@ -790,7 +814,9 @@ function showStatus({ dagPath, checkpointPath }) {
 
   const status = checkpoint.status || 'unknown';
   const pid = activeSupervisorPid(checkpoint);
-  const pauseReason = status === 'paused' ? latestPauseReason(dagPath) || checkpoint.reason : checkpoint.reason;
+  const pause = status === 'paused' ? latestPause(dagPath) : EMPTY_PAUSE;
+  const pauseReason = pause.reason || checkpoint.reason;
+  const blockedTasks = pause.blockedTasks.length > 0 ? pause.blockedTasks : checkpoint.blockedTasks;
 
   printField('status', status);
   printField('runId', checkpoint.runId);
@@ -803,6 +829,7 @@ function showStatus({ dagPath, checkpointPath }) {
   printField('nextRetryAt', checkpoint.nextRunAt);
   printField('waitKind', checkpoint.waitKind);
   printField('pauseReason', pauseReason);
+  printField('blockedTasks', formatBlockedTasks(blockedTasks));
   printField('nextAction', checkpoint.nextAction);
   printField('tasks', formatTaskCounts(counts));
   return statusExitCode(status, counts, false);
@@ -1038,13 +1065,15 @@ async function main(argv) {
     resume = true;
 
     if (result.code === 2) {
-      const reason = latestPauseReason(dagPath);
+      const pause = latestPause(dagPath);
+      const reason = pause.reason;
       const pauses = (readJson(checkpointPath)?.pauses || 0) + 1;
       if (!isQuotaPause(reason)) {
         appendStatus(checkpointPath, {
           status: 'paused',
           pauses,
           reason: reason || 'dag-executor paused',
+          blockedTasks: pause.blockedTasks.length > 0 ? pause.blockedTasks : undefined,
           nextAction: `inspect ${statePathFor(dagPath)} and resume with loom-supervisor ${dagPath}`,
         });
         return 2;

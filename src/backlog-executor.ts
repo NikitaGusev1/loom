@@ -6,7 +6,14 @@
 // event log used by --resume.
 
 import { existsSync } from 'node:fs';
-import type { DAGTask, DecompositionDAG, ExecutorConfig, ExecutionState, TaskUsage } from './types.js';
+import type {
+  BacklogBlockedTask,
+  DAGTask,
+  DecompositionDAG,
+  ExecutorConfig,
+  ExecutionState,
+  TaskUsage,
+} from './types.js';
 import type { DagEvent } from './events/types.js';
 import { DAG_EVENT_SCHEMA_VERSION } from './events/types.js';
 import { createState, emitHelper, getStatePath, loadStateFromEvents, saveState } from './state.js';
@@ -28,6 +35,8 @@ import {
 import { type Decision, decide } from './policy/retry.js';
 import { resolveVerifyCommands } from './verify/detect.js';
 import { runVerification, formatFailures } from './verify/run.js';
+import { describeProjectMemory, loadProjectMemory } from './memory.js';
+import { analyzeBacklogReadiness } from './backlog-readiness.js';
 
 interface BacklogOptions {
   dag: DecompositionDAG;
@@ -54,28 +63,6 @@ const currentLayerFor = (dag: DecompositionDAG, state: ExecutionState, layers: R
   return minLayer;
 };
 
-const readyBacklogTasks = (
-  dag: DecompositionDAG,
-  state: ExecutionState,
-  decisions: ReadonlyMap<string, Decision>,
-): { ready: DAGTask[]; blocked: DAGTask[] } => {
-  const completed = (id: string): boolean => state.tasks[id]?.status === 'completed';
-  const ready: DAGTask[] = [];
-  const blocked: DAGTask[] = [];
-
-  for (const task of dag.tasks) {
-    if (state.tasks[task.id]?.status === 'completed') continue;
-    if (!task.dependencies.every(completed)) continue;
-    if (state.tasks[task.id]?.status === 'failed' && decisions.get(task.id)?.kind === 'permanent') {
-      blocked.push(task);
-      continue;
-    }
-    ready.push(task);
-  }
-
-  return { ready, blocked };
-};
-
 export const executeBacklog = async ({
   dag,
   config,
@@ -90,6 +77,11 @@ export const executeBacklog = async ({
   const taskMap = new Map<string, DAGTask>(dag.tasks.map((t) => [t.id, t]));
   const layers = taskLayerMap(dag);
   const layerFor = (taskId: string): number => layers.get(taskId) ?? 0;
+  const projectMemory = loadProjectMemory({
+    cwd: process.cwd(),
+    path: config.projectMemoryPath,
+    disabled: config.disableMemory,
+  });
 
   let state: ExecutionState;
   if (resume || rerunTaskIds?.length) {
@@ -129,7 +121,7 @@ export const executeBacklog = async ({
     state = emitHelper(eventLogPath, state, event);
   };
 
-  const pause = (reason: string): ExecutionState => {
+  const pause = (reason: string, blockedTasks?: BacklogBlockedTask[]): ExecutionState => {
     emit({
       kind: 'dag.paused',
       schemaVersion: DAG_EVENT_SCHEMA_VERSION,
@@ -138,6 +130,7 @@ export const executeBacklog = async ({
       dagId,
       reason,
       currentLayer: currentLayerFor(dag, state, layers),
+      blockedTasks,
     });
     saveState(statePath, state);
     return state;
@@ -153,6 +146,8 @@ export const executeBacklog = async ({
   if (config.disableVerification) {
     log.info('Verification: disabled (--no-verify).');
   }
+  const memoryStatus = describeProjectMemory(projectMemory, config.disableMemory);
+  if (memoryStatus) log.info(memoryStatus);
 
   const runMergedVerification = async (): Promise<ExecutionState | null> => {
     if (Object.keys(verifyCommands).length === 0) return null;
@@ -208,11 +203,15 @@ export const executeBacklog = async ({
 
     const events = readEvents(eventLogPath);
     const decisions = new Map(dag.tasks.map((task) => [task.id, decide(events, task.id)]));
-    const { ready, blocked } = readyBacklogTasks(dag, state, decisions);
+    const { ready, blocked } = analyzeBacklogReadiness(dag, state, decisions);
     if (ready.length === 0) {
-      const blockedIds = blocked.map((task) => task.id).join(', ');
+      if (blocked.length === 0) return pause('No ready backlog tasks');
+
+      const directFailures = blocked.filter((task) => task.kind === 'permanent-failure').map((task) => task.taskId);
+      const dependencyBlocked = blocked.filter((task) => task.kind === 'dependency-blocked').map((task) => task.taskId);
       return pause(
-        blockedIds ? `No ready backlog tasks; blocked by permanent failures: ${blockedIds}` : 'No ready backlog tasks',
+        `No ready backlog tasks; permanent failures: ${directFailures.join(', ') || 'none'}; dependency-blocked: ${dependencyBlocked.join(', ') || 'none'}`,
+        blocked,
       );
     }
 
@@ -274,6 +273,7 @@ export const executeBacklog = async ({
             layerNum: layerFor(task.id),
             verifyCommands,
             signal,
+            projectMemory,
           });
           if (failed) throw new Error(state.tasks[task.id]?.error ?? 'Pass execution failed');
           return { taskId: task.id, usage, trace };

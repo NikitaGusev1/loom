@@ -5,6 +5,11 @@ import type { ExecutionState, DecompositionDAG, ExecutorConfig } from '../types.
 import type { DagEvent } from '../events/types.js';
 import { initialState } from './initial.js';
 
+const clearBlockedTasks = (state: ExecutionState): ExecutionState => {
+  const { blockedTasks: _blockedTasks, ...rest } = state;
+  return rest;
+};
+
 // ---------------------------------------------------------------------------
 // reduce
 // ---------------------------------------------------------------------------
@@ -20,26 +25,30 @@ export const reduce = (state: ExecutionState, event: DagEvent): ExecutionState =
     // DAG-level
     // -------------------------------------------------------------------------
 
-    case 'dag.started':
+    case 'dag.started': {
       return {
-        ...state,
+        ...clearBlockedTasks(state),
         status: 'running',
         startedAt: event.ts,
       };
+    }
 
-    case 'dag.completed':
+    case 'dag.completed': {
       return {
-        ...state,
+        ...clearBlockedTasks(state),
         status: event.finalState.status === 'failed' ? 'failed' : 'completed',
         completedAt: event.ts,
       };
+    }
 
-    case 'dag.paused':
+    case 'dag.paused': {
       return {
-        ...state,
+        ...clearBlockedTasks(state),
         status: 'paused',
         currentLayer: event.currentLayer,
+        ...(event.blockedTasks ? { blockedTasks: event.blockedTasks } : {}),
       };
+    }
 
     case 'dag.aborted':
       return {

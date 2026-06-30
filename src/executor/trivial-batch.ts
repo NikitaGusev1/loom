@@ -7,6 +7,7 @@ import type { DAGTask, ExecutionState, ExecutorConfig, TaskUsage } from '../type
 import type { DagEvent } from '../events/types.js';
 import type { Logger } from '../logger.js';
 import type { SessionTrace } from '../claude-cli.js';
+import type { ProjectMemory } from '../memory.js';
 import { toErrorMessage } from '../exec.js';
 import { buildBatchedTrivialPrompt, VERIFICATION_FIX_NOTICE } from '../prompt.js';
 import { resolveOutputFiles } from '../contracts.js';
@@ -59,6 +60,7 @@ interface ExecuteTrivialBatchArgs {
   layerNum: number;
   signal?: AbortSignal;
   verifyCommands?: ResolvedCommands;
+  projectMemory?: ProjectMemory | null;
 }
 
 export const executeTrivialBatch = async ({
@@ -72,6 +74,7 @@ export const executeTrivialBatch = async ({
   layerNum,
   signal,
   verifyCommands = {},
+  projectMemory,
 }: ExecuteTrivialBatchArgs): Promise<{ success: boolean; filesModified: string[] }> => {
   if (tasks.length === 0) return { success: true, filesModified: [] };
 
@@ -94,7 +97,7 @@ export const executeTrivialBatch = async ({
   let anyPermanentNoOp = false;
 
   while (toRun.length > 0) {
-    const prompt = (attempt > 0 ? TRIVIAL_RETRY_NOTICE : '') + buildBatchedTrivialPrompt(toRun);
+    const prompt = (attempt > 0 ? TRIVIAL_RETRY_NOTICE : '') + buildBatchedTrivialPrompt(toRun, { projectMemory });
 
     // The batch is a single SDK session so the deadline covers all tasks collectively.
     const deadline = createTaskDeadline({
@@ -254,7 +257,7 @@ export const executeTrivialBatch = async ({
           runVerification({ commands: verifyCommands, changedFiles: files, cwd, weight: 'trivial', signal, log }),
       },
       {
-        basePrompt: buildBatchedTrivialPrompt(tasks),
+        basePrompt: buildBatchedTrivialPrompt(tasks, { projectMemory }),
         fixNotice: VERIFICATION_FIX_NOTICE,
         maxAttempts: VERIFICATION_MAX_FIX_ATTEMPTS,
       },
