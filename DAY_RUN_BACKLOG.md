@@ -60,9 +60,11 @@ Acceptance criteria:
 - Warns or blocks on dirty repo state unless explicitly allowed.
 - Runs a cheap provider smoke check when possible.
 
-### 4. Human-Readable Handoff Summary
+### 4. Human-Readable Handoff Summary — Complete
 
 Write a summary file at the end of every supervisor stop.
+
+Status: complete.
 
 Acceptance criteria:
 
@@ -72,11 +74,11 @@ Acceptance criteria:
 - Includes likely next human action for common blockers.
 - Uses stable Markdown so it can be pasted into a new Codex session.
 
-### 5. Continue Past Independent Blockers
+### 5. Continue Past Independent Blockers — Complete
 
 Improve backlog semantics so one permanently failed task does not unnecessarily stop unrelated ready work.
 
-Status: implemented in `src/backlog-readiness.ts`; pause events/state now include blocked-task metadata for direct permanent failures and dependency-blocked descendants.
+Status: complete. Implemented in `src/backlog-readiness.ts`; pause events/state now include blocked-task metadata for direct permanent failures and dependency-blocked descendants.
 
 Acceptance criteria:
 
