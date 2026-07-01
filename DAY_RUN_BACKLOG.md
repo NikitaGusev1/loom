@@ -115,6 +115,25 @@ Acceptance criteria:
 - Supports pause, resume, cancel, and priority.
 - Can run for a full day without relying on one chat context.
 
+### 8. Ready-Work Scheduling Instead Of Layer Barriers
+
+Replace the day-run execution structure with ready-work scheduling instead of strict topological layers.
+
+Status: proposed.
+
+Today, even backlog mode still advances in rounds: it finds the currently runnable set, waits for that whole set to finish, merges successful work, verifies, and only then discovers the next ready set. That preserves the old layer barrier shape. It wastes wall-clock when one slow task shares a round with a fast dependency: downstream work that only needed the fast task waits for unrelated slow work to finish first.
+
+Ready-work scheduling should keep a live queue of tasks whose dependencies are satisfied and start new work as soon as a dependency completes, bounded by the existing global slot semaphore. A task should not wait for its whole layer or batch if all of its actual blockers are already complete.
+
+Acceptance criteria:
+
+- Runs any task as soon as all of its dependencies are complete, without waiting for unrelated same-layer work.
+- Preserves the cross-process slot limit and worktree-per-task isolation.
+- Keeps permanent failures blocking only their dependency descendants.
+- Preserves merge safety, base-branch movement checks, and merged-main verification.
+- Emits enough event/state data for `--resume`, `loom-status`, and handoff summaries to reconstruct in-flight and blocked work.
+- Keeps layered execution available until ready-work scheduling has been proven on lumpy DAGs.
+
 ## Recommended Order
 
 1. Detached day-run command.
@@ -124,3 +143,4 @@ Acceptance criteria:
 5. Continue past independent blockers.
 6. Better quota metadata.
 7. Multi-DAG queue.
+8. Ready-work scheduling.
