@@ -1,5 +1,6 @@
 node_modules/
 build/
+.worktrees/
 
 # AI working artifacts — generated, local-only (plans, specs, decompositions,
 # reviews, figma diffs, event/state JSON, supervisor run logs)
