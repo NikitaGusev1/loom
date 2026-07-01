@@ -92,6 +92,8 @@ Acceptance criteria:
 
 Make quota handling less dependent on a narrow regex over pause reason text.
 
+Status: complete. Retry policy now classifies quota pauses with structured metadata (`category`, `reason`, optional `resetAt` / `retryAfterMs`), `dag.paused` and derived state preserve it, and `loom-supervisor` prefers that metadata when deciding quota waits and checkpointing `nextRunAt`.
+
 Acceptance criteria:
 
 - Preserves structured quota decisions from retry policy through DAG pause state.

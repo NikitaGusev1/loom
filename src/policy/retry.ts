@@ -7,7 +7,8 @@
 //   AC-5: non-transient task.failed → permanent 'non-transient'
 
 import type { DagEvent } from '../events/types.js';
-import { isQuotaLimitError } from './quota.js';
+import type { QuotaLimitMetadata } from '../types.js';
+import { classifyQuotaLimitError } from './quota.js';
 
 // ---------------------------------------------------------------------------
 // Decision type
@@ -16,7 +17,7 @@ import { isQuotaLimitError } from './quota.js';
 export type Decision =
   | { kind: 'retry'; delayMs: number }
   | { kind: 'permanent'; reason: 'timeout-exhausted' | 'non-transient' | 'no-op-exhausted' | 'verification-failed' }
-  | { kind: 'quota'; reason: string }
+  | { kind: 'quota'; reason: string; quota: QuotaLimitMetadata }
   | { kind: 'succeeded' };
 
 // ---------------------------------------------------------------------------
@@ -149,8 +150,9 @@ export const decide = (eventsForTask: ReadonlyArray<DagEvent>, taskId: string): 
     }
 
     if (e.kind === 'task.failed' && e.taskId === taskId) {
-      if (isQuotaLimitError(e.error ?? '')) {
-        return { kind: 'quota', reason: e.error ?? 'quota limit reached' };
+      const quota = classifyQuotaLimitError(e.error ?? '');
+      if (quota) {
+        return { kind: 'quota', reason: quota.reason, quota };
       }
       if (NO_OP_ERROR_PATTERN.test(e.error ?? '')) {
         // Silent no-op: session reported completion without writing files.

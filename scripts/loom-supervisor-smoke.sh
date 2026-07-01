@@ -149,7 +149,13 @@ if [[ -n "$reason" ]]; then
   node -e '
     const fs = require("fs");
     const [statePath, eventsPath, dagPath, reason] = process.argv.slice(1);
-    fs.writeFileSync(statePath, JSON.stringify({ status: "paused" }, null, 2) + "\n");
+    let quota;
+    if (reason.includes("stale retry quota")) {
+      quota = { category: "daily", reason, resetAt: "2000-01-01T00:00:02.000Z", retryAfterMs: 250 };
+    } else if (reason.includes("structured quota")) {
+      quota = { category: "daily", reason, resetAt: "2000-01-01T00:00:02.000Z" };
+    }
+    const state = { status: "paused" };
     const older = {
       kind: "dag.paused",
       schemaVersion: 1,
@@ -160,6 +166,11 @@ if [[ -n "$reason" ]]; then
       currentLayer: 0
     };
     const latest = { ...older, ts: "2000-01-01T00:00:01.000Z", reason };
+    if (quota) {
+      state.quota = quota;
+      latest.quota = quota;
+    }
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n");
     fs.writeFileSync(eventsPath, JSON.stringify(older) + "\n" + JSON.stringify(latest) + "\n");
   ' "$state" "$events" "$DAG_PATH" "$reason"
 fi
@@ -232,6 +243,17 @@ assert_eq 'quota_retry: status' completed "$(json_get "$CASE_CKPT" status)"
 assert_eq 'quota_retry: attempts' 2 "$(json_get "$CASE_CKPT" attempts)"
 assert_eq 'quota_retry: pauses' 1 "$(json_get "$CASE_CKPT" pauses)"
 assert_contains 'quota_retry: resume flag' '--resume' "$CASE_INV"
+
+run_case structured_quota_wait 3 $'2\tstructured quota pause\n2\tstructured quota pause\n2\tstructured quota pause\n2\tstructured quota pause\n2\tstructured quota pause'
+assert_eq 'structured_quota_wait: status' stopped "$(json_get "$CASE_CKPT" status)"
+assert_eq 'structured_quota_wait: attempts' 5 "$(json_get "$CASE_CKPT" attempts)"
+assert_eq 'structured_quota_wait: wait kind' quota "$(json_get "$CASE_CKPT" waitKind)"
+assert_eq 'structured_quota_wait: quota category' daily "$(node -e 'const fs=require("fs"); const o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(o.quota?.category || "");' "$CASE_CKPT")"
+assert_contains 'structured_quota_wait: retry time recorded' 'nextRunAt' "$CASE_CKPT"
+
+run_case stale_reset_retry_after 3 $'2\tstale retry quota pause\n2\tstale retry quota pause\n2\tstale retry quota pause\n2\tstale retry quota pause\n2\tstale retry quota pause'
+assert_eq 'stale_reset_retry_after: status' stopped "$(json_get "$CASE_CKPT" status)"
+assert_eq 'stale_reset_retry_after: retry-after delay' ok "$(node -e 'const fs=require("fs"); const o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const delta=Date.parse(o.nextRunAt)-Date.parse(o.lastStartedAt); process.stdout.write(delta >= 200 ? "ok" : String(delta));' "$CASE_CKPT")"
 
 run_case ordinary_pause 2 $'2\tMerge conflict in task-a'
 assert_eq 'ordinary_pause: status' paused "$(json_get "$CASE_CKPT" status)"

@@ -16,7 +16,7 @@ const ACTIVE_CHECKPOINT_STATUSES = new Set(['running', 'waiting', 'starting', 's
 const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const ESTIMATED_SCOPES = new Set(['single-component', 'multi-file', 'cross-module']);
 const TASK_WEIGHTS = new Set(['trivial', 'standard', 'heavy']);
-const EMPTY_PAUSE = { reason: '', blockedTasks: [] };
+const EMPTY_PAUSE = { reason: '', blockedTasks: [], quota: undefined };
 
 function usage() {
   console.error(`Usage:
@@ -153,6 +153,10 @@ function appendStatus(checkpointPath, patch) {
   return next;
 }
 
+function quotaMetadata(value) {
+  return value && typeof value === 'object' ? value : undefined;
+}
+
 function latestPause(dagPath) {
   const events = readJsonLines(eventLogPathFor(dagPath));
   for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -161,6 +165,7 @@ function latestPause(dagPath) {
       return {
         reason: event.reason,
         blockedTasks: Array.isArray(event.blockedTasks) ? event.blockedTasks : [],
+        quota: quotaMetadata(event.quota),
       };
     }
   }
@@ -170,6 +175,7 @@ function latestPause(dagPath) {
   return {
     reason: typeof state.reason === 'string' ? state.reason : '',
     blockedTasks: Array.isArray(state.blockedTasks) ? state.blockedTasks : [],
+    quota: quotaMetadata(state.quota),
   };
 }
 
@@ -188,10 +194,27 @@ function formatBlockedTasks(blockedTasks) {
     .join(' ');
 }
 
-function isQuotaPause(reason) {
-  return /\b(quota|usage\s+limit|token\s+limit|daily\s+limit|weekly\s+limit|monthly\s+limit|credits?\b)/i.test(
+function isQuotaPause(pause) {
+  if (quotaMetadata(pause?.quota)) return true;
+  const reason = typeof pause === 'string' ? pause : pause?.reason;
+  return /\b(quota|usage\s+limit|account\s+limit|token\s+limit|daily\s+limit|weekly\s+limit|monthly\s+limit|credits?\b)/i.test(
     reason || '',
   );
+}
+
+function quotaDelayMs(quota, fallbackDelaySec) {
+  const metadata = quotaMetadata(quota);
+  if (metadata) {
+    if (typeof metadata.resetAt === 'string') {
+      const resetMs = Date.parse(metadata.resetAt);
+      const delayMs = resetMs - Date.now();
+      if (Number.isFinite(delayMs) && delayMs > 0) return delayMs;
+    }
+    if (Number.isFinite(metadata.retryAfterMs) && metadata.retryAfterMs >= 0) {
+      return metadata.retryAfterMs;
+    }
+  }
+  return fallbackDelaySec * 1000;
 }
 
 function formatSeconds(sec) {
@@ -828,6 +851,8 @@ function showStatus({ dagPath, checkpointPath }) {
   printField('lastLogPath', checkpoint.lastLogPath);
   printField('nextRetryAt', checkpoint.nextRunAt);
   printField('waitKind', checkpoint.waitKind);
+  printField('quotaCategory', checkpoint.quota?.category);
+  printField('quotaResetAt', checkpoint.quota?.resetAt);
   printField('pauseReason', pauseReason);
   printField('blockedTasks', formatBlockedTasks(blockedTasks));
   printField('nextAction', checkpoint.nextAction);
@@ -1068,28 +1093,31 @@ async function main(argv) {
       const pause = latestPause(dagPath);
       const reason = pause.reason;
       const pauses = (readJson(checkpointPath)?.pauses || 0) + 1;
-      if (!isQuotaPause(reason)) {
+      if (!isQuotaPause(pause)) {
         appendStatus(checkpointPath, {
           status: 'paused',
           pauses,
           reason: reason || 'dag-executor paused',
           blockedTasks: pause.blockedTasks.length > 0 ? pause.blockedTasks : undefined,
+          quota: undefined,
           nextAction: `inspect ${statePathFor(dagPath)} and resume with loom-supervisor ${dagPath}`,
         });
         return 2;
       }
 
-      const nextRunAt = new Date(Date.now() + quotaDelaySec * 1000).toISOString();
+      const delayMs = quotaDelayMs(pause.quota, quotaDelaySec);
+      const nextRunAt = new Date(Date.now() + delayMs).toISOString();
       appendStatus(checkpointPath, {
         status: 'waiting',
         pauses,
         reason,
         waitKind: 'quota',
+        quota: pause.quota,
         nextRunAt,
-        nextAction: `retry quota pause after ${formatSeconds(quotaDelaySec)}`,
+        nextAction: `retry quota pause after ${formatSeconds(Math.ceil(delayMs / 1000))}`,
       });
       console.error(`[loom-supervisor] quota pause: retrying at ${nextRunAt}`);
-      await sleep(quotaDelaySec * 1000, signalState);
+      await sleep(delayMs, signalState);
       continue;
     }
 

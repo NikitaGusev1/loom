@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { decide, NO_OP_ERROR_PATTERN } from './retry.js';
+import { classifyQuotaLimitError } from './quota.js';
 import type { DagEvent } from '../events/types.js';
 import type { TaskState } from '../types.js';
 
@@ -159,12 +160,33 @@ describe('quota / usage-limit failure', () => {
     const events: DagEvent[] = [failed('t1', 'You reached your daily usage limit. Try again tomorrow.')];
     const d = decide(events, 't1');
     assert.equal(d.kind, 'quota');
+    if (d.kind === 'quota') assert.equal(d.quota.category, 'daily');
   });
 
   it('quota errors win over transient retry wording', () => {
     const events: DagEvent[] = [failed('t1', 'rate limit: monthly quota exceeded; try again after reset')];
     const d = decide(events, 't1');
     assert.equal(d.kind, 'quota');
+    if (d.kind === 'quota') assert.equal(d.quota.category, 'monthly');
+  });
+
+  it('extracts structured quota metadata including reset time', () => {
+    const d = decide(
+      [failed('t1', 'account limit reached; {"resetsAt":1780938600,"rateLimitType":"five_hour"}')],
+      't1',
+    );
+    assert.equal(d.kind, 'quota');
+    if (d.kind !== 'quota') return;
+    assert.equal(d.quota.category, 'five-hour');
+    assert.equal(d.quota.resetAt, '2026-06-08T17:10:00.000Z');
+  });
+
+  it('covers weekly, usage, credit, token, and account limit wording', () => {
+    assert.equal(classifyQuotaLimitError('weekly usage limit exceeded')?.category, 'weekly');
+    assert.equal(classifyQuotaLimitError('usage cap reached')?.category, 'usage');
+    assert.equal(classifyQuotaLimitError('credits exhausted')?.category, 'credit');
+    assert.equal(classifyQuotaLimitError('token limit reached')?.category, 'token');
+    assert.equal(classifyQuotaLimitError('account limit reached')?.category, 'account');
   });
 });
 

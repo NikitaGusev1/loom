@@ -155,7 +155,7 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 | ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------- |
 | `dag.started`    | Executor begins a fresh or resumed run            | `dagPath`, `dagId`, `branch`, `resume`                                                        | Reducer (sets run start time) |
 | `dag.completed`  | All layers finished (success or partial)          | `dagPath`, `dagId`, `totalTasks`, `succeededTasks`, `failedTasks`, `durationMs`, `finalState` | Reducer, human                |
-| `dag.paused`     | Layer/backlog fails and executor stops (resumable) | `dagPath`, `dagId`, `reason`, `currentLayer`, `blockedTasks?`                                  | Reducer, human                |
+| `dag.paused`     | Layer/backlog fails and executor stops (resumable) | `dagPath`, `dagId`, `reason`, `currentLayer`, `blockedTasks?`, `quota?`                        | Reducer, human                |
 | `dag.aborted`    | SIGINT / SIGTERM received or fatal internal error | `dagPath`, `dagId`, `reason`, `signal`                                                        | Reducer, human                |
 | `dag.base-moved` | Base branch HEAD changed between layer runs       | `dagPath`, `dagId`, `previousCommit`, `newCommit`, `branch`                                   | Reducer (abort trigger)       |
 
@@ -344,7 +344,7 @@ Resume is still event-log based:
 dag-executor <dagPath> --backlog --resume
 ```
 
-Quota / usage-limit errors pause the run instead of retrying in a tight loop. After the account limit resets, run the same command with `--resume`; completed and merged tasks are skipped, and the quota-blocked task is attempted again.
+Quota / usage-limit errors pause the run instead of retrying in a tight loop. The pause event and derived state include `quota` metadata when retry policy can classify the provider message: `category`, original `reason`, and optional `resetAt` / `retryAfterMs`. After the account limit resets, run the same command with `--resume`; completed and merged tasks are skipped, and the quota-blocked task is attempted again.
 
 ### Loom supervisor
 
@@ -357,11 +357,11 @@ loom-day-run <dagPath> --provider=codex
 `loom-day-run` starts a detached `loom-supervisor` process. The supervisor runs `dag-executor <dagPath> --backlog`, then supervises the run:
 
 - completed DAG exits `0`
-- quota / usage-limit pauses wait and retry with `--resume`
+- quota / usage-limit pauses wait and retry with `--resume`, preferring `dag.paused.quota.resetAt` / `retryAfterMs` when available
 - process crashes wait and restart with `--resume`
 - ordinary pauses such as merge conflicts or verification failures stop with exit `2`
 
-The supervisor writes a checkpoint next to the DAG at `<dag>.supervisor.json`, writes the detached supervisor log at `<dag-dir>/.loom-supervisor/supervisor.log`, and logs attempts under `<dag-dir>/.loom-supervisor/logs/`.
+The supervisor writes a checkpoint next to the DAG at `<dag>.supervisor.json`, including `nextRunAt` for waits and quota metadata when available. It writes the detached supervisor log at `<dag-dir>/.loom-supervisor/supervisor.log`, and logs attempts under `<dag-dir>/.loom-supervisor/logs/`.
 
 Foreground mode is still available:
 

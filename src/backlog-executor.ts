@@ -12,6 +12,7 @@ import type {
   DecompositionDAG,
   ExecutorConfig,
   ExecutionState,
+  QuotaLimitMetadata,
   TaskUsage,
 } from './types.js';
 import type { DagEvent } from './events/types.js';
@@ -121,7 +122,7 @@ export const executeBacklog = async ({
     state = emitHelper(eventLogPath, state, event);
   };
 
-  const pause = (reason: string, blockedTasks?: BacklogBlockedTask[]): ExecutionState => {
+  const pause = (reason: string, blockedTasks?: BacklogBlockedTask[], quota?: QuotaLimitMetadata): ExecutionState => {
     emit({
       kind: 'dag.paused',
       schemaVersion: DAG_EVENT_SCHEMA_VERSION,
@@ -131,6 +132,7 @@ export const executeBacklog = async ({
       reason,
       currentLayer: currentLayerFor(dag, state, layers),
       blockedTasks,
+      quota,
     });
     saveState(statePath, state);
     return state;
@@ -257,6 +259,7 @@ export const executeBacklog = async ({
     const retryAttempts = new Map<string, number>();
     let activeTasks = [...ready];
     let quotaReason: string | undefined;
+    let quota: QuotaLimitMetadata | undefined;
 
     while (activeTasks.length > 0 && !quotaReason) {
       const results = await Promise.allSettled(
@@ -328,6 +331,7 @@ export const executeBacklog = async ({
         const decision = decide(readEvents(eventLogPath), task.id);
         if (decision.kind === 'quota') {
           quotaReason = `Quota limit reached while running ${task.id}: ${decision.reason}`;
+          quota = decision.quota;
           log.warn(quotaReason);
         } else if (decision.kind === 'retry') {
           const attempt = (retryAttempts.get(task.id) ?? 0) + 1;
@@ -372,7 +376,7 @@ export const executeBacklog = async ({
     saveState(statePath, state);
     const pausedAfterBatchMerge = await mergeCompleted([...succeeded]);
     if (pausedAfterBatchMerge) return pausedAfterBatchMerge;
-    if (quotaReason) return pause(`${quotaReason}. Resume with --resume after the limit resets.`);
+    if (quotaReason) return pause(`${quotaReason}. Resume with --resume after the limit resets.`, undefined, quota);
   }
 
   state.status = 'completed';

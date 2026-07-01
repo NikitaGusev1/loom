@@ -138,6 +138,25 @@ export interface BacklogBlockedTask {
   reason?: string;
 }
 
+export type QuotaLimitCategory =
+  | 'daily'
+  | 'weekly'
+  | 'monthly'
+  | 'five-hour'
+  | 'usage'
+  | 'credit'
+  | 'token'
+  | 'account'
+  | 'rate'
+  | 'quota';
+
+export interface QuotaLimitMetadata {
+  category: QuotaLimitCategory;
+  reason: string;
+  resetAt?: string;
+  retryAfterMs?: number;
+}
+
 export interface LayerState {
   startedAt: string | null;
   completedAt: string | null;
@@ -155,6 +174,8 @@ export interface ExecutionState {
   tasks: Record<string, TaskState>;
   /** Present on paused backlog runs when permanent failures block remaining tasks. */
   blockedTasks?: BacklogBlockedTask[];
+  /** Present on quota / usage-limit pauses when retry policy classified the blocker. */
+  quota?: QuotaLimitMetadata;
   /** Marks a state.json written by saveState as a derived cache artifact. */
   derived?: true;
 }

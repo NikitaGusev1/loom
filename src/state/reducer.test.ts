@@ -195,6 +195,25 @@ describe('reduce — dag.paused', () => {
     const next = reduce(init(), event);
     assert.deepEqual(next.blockedTasks, event.blockedTasks);
   });
+
+  it('stores quota metadata when present', () => {
+    const event: DagEvent = {
+      kind: 'dag.paused',
+      schemaVersion: V,
+      ts,
+      dagPath: '/test/dag.json',
+      dagId: 'test-dag',
+      reason: 'Quota limit reached while running task-a',
+      currentLayer: 0,
+      quota: {
+        category: 'daily',
+        reason: 'daily usage limit reached',
+        resetAt: '2026-06-08T12:30:00.000Z',
+      },
+    };
+    const next = reduce(init(), event);
+    assert.deepEqual(next.quota, event.quota);
+  });
 });
 
 describe('reduce — dag.aborted', () => {

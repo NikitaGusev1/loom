@@ -7,7 +7,14 @@
 // src/executor/ (session, git-ops, noop-gate, task-passes, trivial-batch).
 
 import { existsSync } from 'node:fs';
-import type { ExecutionState, ExecuteOptions, DAGTask, TaskUsage, ExecutionLayer } from './types.js';
+import type {
+  ExecutionState,
+  ExecuteOptions,
+  DAGTask,
+  TaskUsage,
+  ExecutionLayer,
+  QuotaLimitMetadata,
+} from './types.js';
 import type { DagEvent } from './events/types.js';
 import { exec } from './exec.js';
 import { createState, loadStateFromEvents, saveState, getStatePath, emitHelper } from './state.js';
@@ -120,7 +127,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
 
   // Centralizes emit(dag.paused) → saveState ordering: no pause site can
   // drift out of sync with the reducer's derived state.
-  const pauseDag = (reason: string, currentLayer: number): ExecutionState => {
+  const pauseDag = (reason: string, currentLayer: number, quota?: QuotaLimitMetadata): ExecutionState => {
     emit({
       kind: 'dag.paused',
       schemaVersion: DAG_EVENT_SCHEMA_VERSION,
@@ -129,6 +136,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
       dagId,
       reason,
       currentLayer,
+      quota,
     });
     saveState(statePath, state);
     return state;
@@ -393,6 +401,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
       const permanentFailedIds = new Set<string>();
       const retryAttempts = new Map<string, number>();
       let quotaPauseReason: string | undefined;
+      let quotaPause: QuotaLimitMetadata | undefined;
       let activeTasks = [...nonTrivialTasks];
       let completedInLayer = 0;
       const layerTotal = nonTrivialTasks.length;
@@ -510,6 +519,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
             log.warn(`Task ${taskId} will retry (attempt ${attempt}) after ${decision.delayMs}ms`);
           } else if (decision.kind === 'quota') {
             quotaPauseReason = `Quota limit reached while running ${taskId}: ${decision.reason}`;
+            quotaPause = decision.quota;
             permanentFailedIds.add(taskId);
             log.warn(quotaPauseReason);
           } else if (decision.kind === 'permanent') {
@@ -551,7 +561,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
 
       if (quotaPauseReason && !hasAnySuccess) {
         log.warn(`${quotaPauseReason}. State saved. Resume with --resume after the limit resets.`);
-        return pauseDag(quotaPauseReason, layer.layer);
+        return pauseDag(quotaPauseReason, layer.layer, quotaPause);
       }
 
       if (hasAnyPermanentFailure && !hasAnySuccess) {
@@ -631,7 +641,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
 
       if (quotaPauseReason) {
         log.warn(`${quotaPauseReason}. Merged completed work; resume with --resume after the limit resets.`);
-        return pauseDag(quotaPauseReason, layer.layer);
+        return pauseDag(quotaPauseReason, layer.layer, quotaPause);
       }
     }
 
