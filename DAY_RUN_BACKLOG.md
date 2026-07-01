@@ -101,9 +101,11 @@ Acceptance criteria:
 - Records next retry time in the supervisor checkpoint.
 - Avoids tight retry loops when the provider gives no reset time.
 
-### 7. Queue Beyond One DAG
+### 7. Queue Beyond One DAG — Complete
 
 Introduce a persistent task queue above individual DAG files.
+
+Status: complete. Added a JSON-backed multi-DAG queue to `loom-supervisor`, with add/run/status/pause/resume/cancel/priority commands, stale worker recovery, detached queue workers, and smoke coverage.
 
 Acceptance criteria:
 

@@ -388,6 +388,36 @@ loom-status <dagPath>
 
 Status output includes the supervisor state, attempt number, last exit code, last attempt log, next retry time, latest pause reason, and DAG task counts. It exits non-zero when the checkpoint is missing or the run is blocked.
 
+### Multi-DAG queue
+
+For all-day runs across more than one DAG, `loom-supervisor` also has a persistent queue. The default queue file is `.loom-supervisor/queue.json`; override it with `--queue=<path>` or `LOOM_SUPERVISOR_QUEUE`.
+
+Add DAGs with optional priority and normal `dag-executor` flags:
+
+```sh
+loom-supervisor --queue-add path/to/a.json --priority=10 --provider=codex
+loom-supervisor --queue-add path/to/b.json --priority=1 --provider=codex
+```
+
+Run the queue in the foreground, or detach it:
+
+```sh
+loom-supervisor --queue-run
+loom-supervisor --queue-run --detach
+```
+
+The queue worker claims the highest-priority queued item, runs the existing single-DAG supervisor for that DAG, records the final item status, then takes the next queued item. Queue state is written atomically and protected by a short lock file so restarts can recover stale `running` items.
+
+Manage queue items:
+
+```sh
+loom-supervisor --queue-status
+loom-supervisor --queue-pause <item-id>
+loom-supervisor --queue-resume <item-id>
+loom-supervisor --queue-cancel <item-id>
+loom-supervisor --queue-priority <item-id> 20
+```
+
 On macOS, detached runs use `caffeinate` when available so the machine does not sleep mid-run.
 
 Useful knobs:

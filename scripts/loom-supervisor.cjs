@@ -13,6 +13,7 @@ const DEFAULT_CRASH_DELAY_SEC = 60;
 const DEFAULT_CRASH_DELAY_MAX_SEC = 15 * 60;
 const DEFAULT_QUOTA_DELAY_SEC = 30 * 60;
 const ACTIVE_CHECKPOINT_STATUSES = new Set(['running', 'waiting', 'starting', 'stopping']);
+const QUEUE_INCOMPLETE_STATUSES = new Set(['queued', 'running', 'paused', 'stopped', 'failed']);
 const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const ESTIMATED_SCOPES = new Set(['single-component', 'multi-file', 'cross-module']);
 const TASK_WEIGHTS = new Set(['trivial', 'standard', 'heavy']);
@@ -24,6 +25,13 @@ function usage() {
   loom-supervisor --detach <dag.json> [dag-executor flags...]
   loom-supervisor --status <dag.json>
   loom-supervisor --stop <dag.json>
+  loom-supervisor --queue-add <dag.json> [--priority=N] [dag-executor flags...]
+  loom-supervisor --queue-run
+  loom-supervisor --queue-status
+  loom-supervisor --queue-pause <item-id>
+  loom-supervisor --queue-resume <item-id>
+  loom-supervisor --queue-cancel <item-id>
+  loom-supervisor --queue-priority <item-id> <priority>
   loom-day-run <dag.json> [dag-executor flags...]
   loom-status <dag.json>
 
@@ -37,6 +45,7 @@ Day-run behavior:
   - --allow-dirty-repo permits starting when git status is dirty
   - --status prints checkpoint + DAG task status
   - --stop sends SIGTERM to the PID in the checkpoint
+  - --queue=<path> selects a persistent multi-DAG queue file
   - on macOS, detached runs use caffeinate when available
 
 Default behavior:
@@ -50,6 +59,7 @@ Environment:
   LOOM_SUPERVISOR_CHECKPOINT        default: <dag>.supervisor.json
   LOOM_SUPERVISOR_LOG_DIR           default: <dag-dir>/.loom-supervisor/logs
   LOOM_SUPERVISOR_DETACH_LOG        default: <dag-dir>/.loom-supervisor/supervisor.log
+  LOOM_SUPERVISOR_QUEUE             default: .loom-supervisor/queue.json
   LOOM_SUPERVISOR_MAX_WALLCLOCK_SEC default: 86400
   LOOM_SUPERVISOR_MAX_ATTEMPTS      default: 100
   LOOM_SUPERVISOR_CRASH_DELAY_SEC   default: 60
@@ -228,6 +238,14 @@ function makeRunId() {
   return `loom-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, 'Z')}-${process.pid}`;
 }
 
+function requireValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith('--')) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
 function parseArgs(argv) {
   const flags = {
     detach: false,
@@ -236,17 +254,58 @@ function parseArgs(argv) {
     allowDirtyRepo: false,
     status: false,
     stop: false,
+    queueAdd: false,
+    queueRun: false,
+    queueStatus: false,
+    queuePause: false,
+    queueResume: false,
+    queueCancel: false,
+    queuePriority: false,
+    queuePath: undefined,
+    priority: 0,
     help: false,
   };
   const rest = [];
 
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
     if (arg === '--detach') flags.detach = true;
     else if (arg === '--force-detach') flags.forceDetach = true;
     else if (arg === '--foreground') flags.foreground = true;
     else if (arg === '--allow-dirty-repo') flags.allowDirtyRepo = true;
     else if (arg === '--status') flags.status = true;
     else if (arg === '--stop') flags.stop = true;
+    else if (arg === '--queue-add') flags.queueAdd = true;
+    else if (arg.startsWith('--queue-add=')) {
+      flags.queueAdd = true;
+      rest.push(arg.slice('--queue-add='.length));
+    } else if (arg === '--queue-run') flags.queueRun = true;
+    else if (arg === '--queue-status') flags.queueStatus = true;
+    else if (arg === '--queue-pause') {
+      flags.queuePause = true;
+      rest.push(requireValue(argv, i, arg));
+      i += 1;
+    } else if (arg === '--queue-resume') {
+      flags.queueResume = true;
+      rest.push(requireValue(argv, i, arg));
+      i += 1;
+    } else if (arg === '--queue-cancel') {
+      flags.queueCancel = true;
+      rest.push(requireValue(argv, i, arg));
+      i += 1;
+    } else if (arg === '--queue-priority') {
+      flags.queuePriority = true;
+      rest.push(requireValue(argv, i, arg));
+      rest.push(requireValue(argv, i + 1, arg));
+      i += 2;
+    } else if (arg === '--queue') {
+      flags.queuePath = requireValue(argv, i, arg);
+      i += 1;
+    } else if (arg.startsWith('--queue=')) flags.queuePath = arg.slice('--queue='.length);
+    else if (arg === '--priority') {
+      flags.priority = Number(requireValue(argv, i, arg));
+      i += 1;
+    } else if (arg.startsWith('--priority=')) flags.priority = Number(arg.slice('--priority='.length));
     else if (arg === '-h' || arg === '--help') flags.help = true;
     else rest.push(arg);
   }
@@ -267,6 +326,401 @@ function resolvePaths(dagPath) {
       process.env.LOOM_SUPERVISOR_DETACH_LOG || path.join(path.dirname(logDir), 'supervisor.log'),
     ),
   };
+}
+
+function resolveQueuePath(queuePath) {
+  return path.resolve(queuePath || process.env.LOOM_SUPERVISOR_QUEUE || path.join('.loom-supervisor', 'queue.json'));
+}
+
+function queueLockPath(queuePath) {
+  return `${queuePath}.lock`;
+}
+
+function readQueue(queuePath) {
+  const queue = readJson(queuePath);
+  if (queue && isRecord(queue) && Array.isArray(queue.items)) return queue;
+  return {
+    schemaVersion: 1,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    items: [],
+  };
+}
+
+function writeQueue(queuePath, queue) {
+  writeAtomic(queuePath, { ...queue, schemaVersion: 1, updatedAt: nowIso() });
+}
+
+function queueItemId(dagPath) {
+  const base = path.basename(dagPath, path.extname(dagPath)).replace(/[^a-zA-Z0-9_-]+/g, '-');
+  return `${base || 'dag'}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function withQueueLock(queuePath, fn) {
+  fs.mkdirSync(path.dirname(queuePath), { recursive: true });
+  const lockPath = queueLockPath(queuePath);
+  let fd;
+
+  try {
+    fd = fs.openSync(lockPath, 'wx');
+  } catch (err) {
+    if (err && err.code === 'EEXIST') {
+      const lock = readJson(lockPath);
+      const pid = Number(lock?.pid);
+      if (!isPositiveInteger(pid) || !isPidAlive(pid)) {
+        fs.rmSync(lockPath, { force: true });
+        fd = fs.openSync(lockPath, 'wx');
+      } else {
+        throw new Error(`queue is locked by running pid ${pid}: ${lockPath}`);
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  try {
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: nowIso() }) + '\n', 'utf8');
+    const queue = readQueue(queuePath);
+    const result = fn(queue);
+    if (result !== false) writeQueue(queuePath, queue);
+    return result;
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(lockPath, { force: true });
+  }
+}
+
+function findQueueItem(queue, itemId) {
+  return queue.items.find((item) => item && item.id === itemId);
+}
+
+function normalizeQueueRunningItems(queue) {
+  let changed = false;
+  for (const item of queue.items) {
+    if (item?.status !== 'running') continue;
+    if (queueItemHasLiveOwner(item)) continue;
+    item.status = 'queued';
+    item.reason = 'requeued after stale worker';
+    item.workerPid = undefined;
+    item.supervisorPid = undefined;
+    item.updatedAt = nowIso();
+    changed = true;
+  }
+  return changed;
+}
+
+function queueItemHasLiveOwner(item) {
+  const workerPid = Number(item?.workerPid);
+  const supervisorPid = Number(item?.supervisorPid);
+  return (
+    (isPositiveInteger(workerPid) && isPidAlive(workerPid)) ||
+    (isPositiveInteger(supervisorPid) && isPidAlive(supervisorPid))
+  );
+}
+
+function queueRunnableItems(queue) {
+  normalizeQueueRunningItems(queue);
+  return queue.items
+    .filter((item) => item && item.status === 'queued')
+    .sort((a, b) => {
+      const priorityDelta = Number(b.priority || 0) - Number(a.priority || 0);
+      if (priorityDelta !== 0) return priorityDelta;
+      return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+    });
+}
+
+function validatePriority(priority) {
+  if (!Number.isFinite(priority)) throw new Error('priority must be a number');
+  return priority;
+}
+
+function addQueueItem({ queuePath, dagArg, userArgs, priority, allowDirtyRepo }) {
+  if (!dagArg) {
+    console.error('[loom-supervisor] --queue-add requires a DAG path');
+    return 1;
+  }
+
+  const dagPath = path.resolve(dagArg);
+  if (!fs.existsSync(dagPath)) {
+    console.error(`[loom-supervisor] DAG not found: ${dagPath}`);
+    return 1;
+  }
+
+  const errors = [];
+  checkDagFile(dagPath, errors);
+  if (errors.length > 0) {
+    for (const error of errors) console.error(`[loom-supervisor] queue add failed: ${error}`);
+    return 1;
+  }
+
+  const item = {
+    id: queueItemId(dagPath),
+    dagPath,
+    args: userArgs,
+    allowDirtyRepo,
+    priority: validatePriority(priority),
+    status: 'queued',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    attempts: 0,
+  };
+
+  withQueueLock(queuePath, (queue) => {
+    queue.items.push(item);
+  });
+
+  console.log(`queued: ${item.id}`);
+  console.log(`dagPath: ${item.dagPath}`);
+  console.log(`priority: ${item.priority}`);
+  console.log(`queue: ${queuePath}`);
+  return 0;
+}
+
+function printQueueItem(item) {
+  const fields = [
+    `id=${item.id}`,
+    `status=${item.status}`,
+    `priority=${item.priority || 0}`,
+    `dag=${item.dagPath}`,
+  ];
+  if (item.workerPid) fields.push(`workerPid=${item.workerPid}`);
+  if (item.supervisorPid) fields.push(`supervisorPid=${item.supervisorPid}`);
+  if (item.lastExitCode !== undefined) fields.push(`lastExitCode=${item.lastExitCode}`);
+  if (item.reason) fields.push(`reason=${item.reason}`);
+  console.log(fields.join(' '));
+}
+
+function showQueueStatus(queuePath) {
+  const queue = withQueueLock(queuePath, (current) => {
+    normalizeQueueRunningItems(current);
+    return { ...current, items: [...current.items] };
+  });
+  console.log(`queue: ${queuePath}`);
+  console.log(`items: ${queue.items.length}`);
+  for (const item of queue.items) printQueueItem(item);
+  const blocked = queue.items.some((item) => item && ['paused', 'stopped', 'failed'].includes(item.status));
+  return blocked ? 2 : 0;
+}
+
+function updateQueueItemStatus({ queuePath, itemId, nextStatus }) {
+  let updated;
+  withQueueLock(queuePath, (queue) => {
+    normalizeQueueRunningItems(queue);
+    const item = findQueueItem(queue, itemId);
+    if (!item) throw new Error(`queue item not found: ${itemId}`);
+    if (nextStatus === 'queued' && item.status === 'canceled') {
+      throw new Error(`cannot resume canceled queue item: ${itemId}`);
+    }
+    const oldStatus = item.status;
+    item.status = nextStatus;
+    item.updatedAt = nowIso();
+    if (nextStatus === 'queued') {
+      item.workerPid = undefined;
+      item.supervisorPid = undefined;
+      item.reason = undefined;
+      item.finishedAt = undefined;
+    }
+    if (nextStatus === 'paused') item.reason = oldStatus === 'running' ? 'pause requested' : 'paused by user';
+    if (nextStatus === 'canceled') item.reason = oldStatus === 'running' ? 'cancel requested' : 'canceled by user';
+    updated = { ...item, oldStatus };
+  });
+
+  if ((nextStatus === 'paused' || nextStatus === 'canceled') && updated.oldStatus === 'running') {
+    const supervisorPid = Number(updated.supervisorPid);
+    const workerPid = Number(updated.workerPid);
+    const pid = isPositiveInteger(supervisorPid) ? supervisorPid : workerPid;
+    if (isPositiveInteger(pid) && isPidAlive(pid)) process.kill(pid, 'SIGTERM');
+  }
+
+  console.log(`${updated.id}: ${updated.oldStatus} -> ${updated.status}`);
+  return 0;
+}
+
+function updateQueueItemPriority({ queuePath, itemId, priority }) {
+  let updated;
+  withQueueLock(queuePath, (queue) => {
+    normalizeQueueRunningItems(queue);
+    const item = findQueueItem(queue, itemId);
+    if (!item) throw new Error(`queue item not found: ${itemId}`);
+    item.priority = validatePriority(priority);
+    item.updatedAt = nowIso();
+    updated = { ...item };
+  });
+  console.log(`${updated.id}: priority=${updated.priority}`);
+  return 0;
+}
+
+function claimNextQueueItem(queuePath) {
+  return withQueueLock(queuePath, (queue) => {
+    const item = queueRunnableItems(queue)[0];
+    if (!item) return null;
+    item.status = 'running';
+    item.workerPid = process.pid;
+    item.startedAt = nowIso();
+    item.updatedAt = nowIso();
+    item.attempts = Number(item.attempts || 0) + 1;
+    item.reason = undefined;
+    return { ...item, args: [...(item.args || [])] };
+  });
+}
+
+function finishQueueItem(queuePath, itemId, patch) {
+  withQueueLock(queuePath, (queue) => {
+    const item = findQueueItem(queue, itemId);
+    if (!item) return;
+    if (item.status === 'paused' || item.status === 'canceled') {
+      item.workerPid = undefined;
+      item.supervisorPid = undefined;
+      item.finishedAt = nowIso();
+      item.updatedAt = nowIso();
+      return;
+    }
+    Object.assign(item, patch, {
+      workerPid: undefined,
+      supervisorPid: undefined,
+      finishedAt: nowIso(),
+      updatedAt: nowIso(),
+    });
+  });
+}
+
+function markQueueItemSupervisor({ queuePath, itemId, supervisorPid }) {
+  withQueueLock(queuePath, (queue) => {
+    const item = findQueueItem(queue, itemId);
+    if (!item || item.status !== 'running') return;
+    item.supervisorPid = supervisorPid;
+    item.updatedAt = nowIso();
+  });
+}
+
+function queueCompletionPatch(item, result) {
+  const checkpointPath = resolvePaths(item.dagPath).checkpointPath;
+  if (result.code === 0) {
+    return {
+      status: 'completed',
+      lastExitCode: 0,
+      checkpointPath,
+      reason: undefined,
+    };
+  }
+  if (result.code === 2) {
+    return {
+      status: 'paused',
+      lastExitCode: 2,
+      checkpointPath,
+      reason: latestPause(item.dagPath).reason || 'dag paused',
+    };
+  }
+  if (result.code === 3) {
+    return {
+      status: 'stopped',
+      lastExitCode: 3,
+      checkpointPath,
+      reason: readJson(checkpointPath)?.reason || 'supervisor stopped',
+    };
+  }
+  return {
+    status: 'failed',
+    lastExitCode: result.code,
+    checkpointPath,
+    reason: result.reason || `supervisor exited ${result.code}`,
+  };
+}
+
+function incompleteQueueItems(queuePath) {
+  return withQueueLock(queuePath, (queue) => {
+    normalizeQueueRunningItems(queue);
+    return queue.items.filter((item) => item && QUEUE_INCOMPLETE_STATUSES.has(item.status)).length;
+  });
+}
+
+function queueChildEnv() {
+  const env = { ...process.env };
+  delete env.LOOM_SUPERVISOR_CHECKPOINT;
+  delete env.LOOM_SUPERVISOR_LOG_DIR;
+  delete env.LOOM_SUPERVISOR_DETACH_LOG;
+  return env;
+}
+
+async function runQueueWorker({ queuePath }) {
+  const signalState = { stopping: false, child: undefined };
+  const stop = (signal) => {
+    signalState.stopping = true;
+    if (signalState.child) signalState.child.kill(signal);
+  };
+  process.on('SIGINT', () => stop('SIGINT'));
+  process.on('SIGTERM', () => stop('SIGTERM'));
+
+  while (!signalState.stopping) {
+    const item = claimNextQueueItem(queuePath);
+    if (!item) break;
+
+    const childArgs = [__filename];
+    if (item.allowDirtyRepo) childArgs.push('--allow-dirty-repo');
+    childArgs.push(item.dagPath, ...(item.args || []));
+    console.error(`[loom-supervisor] queue item=${item.id} node ${childArgs.join(' ')}`);
+
+    const result = await new Promise((resolve) => {
+      const child = spawn(process.execPath, childArgs, { stdio: 'inherit', env: queueChildEnv() });
+      signalState.child = child;
+      if (isPositiveInteger(child.pid)) {
+        markQueueItemSupervisor({ queuePath, itemId: item.id, supervisorPid: child.pid });
+      }
+      child.on('error', (err) => {
+        signalState.child = undefined;
+        resolve({ code: 127, reason: err.message });
+      });
+      child.on('exit', (code, signal) => {
+        signalState.child = undefined;
+        resolve({ code: code ?? 1, signal });
+      });
+    });
+
+    if (signalState.stopping) {
+      finishQueueItem(queuePath, item.id, {
+        status: 'stopped',
+        lastExitCode: result.code,
+        lastSignal: result.signal,
+        reason: `queue worker received ${result.signal || 'stop signal'}`,
+      });
+      return 130;
+    }
+
+    finishQueueItem(queuePath, item.id, queueCompletionPatch(item, result));
+  }
+
+  return incompleteQueueItems(queuePath) > 0 ? 2 : 0;
+}
+
+function detachQueueWorker({ queuePath, forceDetach }) {
+  const active = withQueueLock(queuePath, (queue) => {
+    normalizeQueueRunningItems(queue);
+    return queue.items.find((item) => item && item.status === 'running' && queueItemHasLiveOwner(item));
+  });
+  if (active && !forceDetach) {
+    const pid = active.supervisorPid || active.workerPid;
+    console.error(`[loom-supervisor] queue worker already running item ${active.id} (pid ${pid})`);
+    return 4;
+  }
+
+  fs.mkdirSync(path.dirname(queuePath), { recursive: true });
+  const logPath = path.join(path.dirname(queuePath), 'queue-supervisor.log');
+  const fd = fs.openSync(logPath, 'a');
+  let child;
+  try {
+    child = spawn(process.execPath, [__filename, '--queue-run', '--queue', queuePath], {
+      detached: true,
+      stdio: ['ignore', fd, fd],
+      env: process.env,
+    });
+  } finally {
+    fs.closeSync(fd);
+  }
+  child.unref();
+  console.error(`[loom-supervisor] detached queue pid=${child.pid}`);
+  console.error(`[loom-supervisor] queue=${queuePath}`);
+  console.error(`[loom-supervisor] queueLog=${logPath}`);
+  return 0;
 }
 
 function activeSupervisorPid(checkpoint) {
@@ -967,6 +1421,29 @@ async function main(argv) {
     usage();
     return 0;
   }
+
+  const queuePath = resolveQueuePath(flags.queuePath);
+  if (flags.queueStatus) return showQueueStatus(queuePath);
+  if (flags.queueAdd) {
+    return addQueueItem({
+      queuePath,
+      dagArg,
+      userArgs,
+      priority: flags.priority,
+      allowDirtyRepo: flags.allowDirtyRepo,
+    });
+  }
+  if (flags.queuePause) return updateQueueItemStatus({ queuePath, itemId: dagArg, nextStatus: 'paused' });
+  if (flags.queueResume) return updateQueueItemStatus({ queuePath, itemId: dagArg, nextStatus: 'queued' });
+  if (flags.queueCancel) return updateQueueItemStatus({ queuePath, itemId: dagArg, nextStatus: 'canceled' });
+  if (flags.queuePriority) {
+    return updateQueueItemPriority({ queuePath, itemId: dagArg, priority: Number(userArgs[0]) });
+  }
+  if (flags.queueRun) {
+    if (flags.detach) return detachQueueWorker({ queuePath, forceDetach: flags.forceDetach });
+    return runQueueWorker({ queuePath });
+  }
+
   if (!dagArg) {
     usage();
     return 1;

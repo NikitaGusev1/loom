@@ -55,6 +55,16 @@ json_get() {
   ' "$1" "$2"
 }
 
+queue_item_get() {
+  node -e '
+    const fs = require("fs");
+    const queue = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const item = queue.items.find((entry) => entry.id === process.argv[2]);
+    const value = item?.[process.argv[3]];
+    process.stdout.write(value === undefined || value === null ? "" : String(value));
+  ' "$1" "$2" "$3"
+}
+
 write_smoke_dag() {
   local dag="$1"
   node -e '
@@ -477,6 +487,91 @@ wait_json_value "$DETACH_CKPT" status completed
 assert_file_exists 'detach_completed: supervisor log' "$DETACH_SUPERVISOR_LOG"
 assert_contains 'detach_completed: backlog flag' '--backlog' "$DETACH_INV"
 assert_eq 'detach_completed: attempts' 1 "$(json_get "$DETACH_CKPT" attempts)"
+
+QUEUE_DIR="${TMP_DIR}/queue_run"
+mkdir -p "$QUEUE_DIR"
+QUEUE_PATH="${QUEUE_DIR}/queue.json"
+QUEUE_DAG_LOW="${QUEUE_DIR}/low.json"
+QUEUE_DAG_HIGH="${QUEUE_DIR}/high.json"
+QUEUE_DAG_CANCEL="${QUEUE_DIR}/cancel.json"
+QUEUE_PLAN="${QUEUE_DIR}/plan.tsv"
+QUEUE_INV="${QUEUE_DIR}/inv.log"
+QUEUE_COUNT="${QUEUE_DIR}/count"
+QUEUE_ADD_LOW_OUT="${QUEUE_DIR}/add-low.txt"
+QUEUE_ADD_HIGH_OUT="${QUEUE_DIR}/add-high.txt"
+QUEUE_ADD_CANCEL_OUT="${QUEUE_DIR}/add-cancel.txt"
+QUEUE_STATUS_OUT="${QUEUE_DIR}/status.txt"
+write_smoke_dag "$QUEUE_DAG_LOW"
+write_smoke_dag "$QUEUE_DAG_HIGH"
+write_smoke_dag "$QUEUE_DAG_CANCEL"
+printf '0\n0\n' >"$QUEUE_PLAN"
+: >"$QUEUE_INV"
+
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_DAG_LOW" --priority=1 --allow-dirty-repo --provider=codex >"$QUEUE_ADD_LOW_OUT"
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_DAG_HIGH" --priority=10 --allow-dirty-repo --provider=codex >"$QUEUE_ADD_HIGH_OUT"
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_DAG_CANCEL" --priority=5 --allow-dirty-repo --provider=codex >"$QUEUE_ADD_CANCEL_OUT"
+QUEUE_LOW_ID="$(awk '/^queued:/ { print $2 }' "$QUEUE_ADD_LOW_OUT")"
+QUEUE_CANCEL_ID="$(awk '/^queued:/ { print $2 }' "$QUEUE_ADD_CANCEL_OUT")"
+
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-pause "$QUEUE_LOW_ID" >/dev/null
+assert_eq 'queue pause: status' paused "$(queue_item_get "$QUEUE_PATH" "$QUEUE_LOW_ID" status)"
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-resume "$QUEUE_LOW_ID" >/dev/null
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-priority "$QUEUE_LOW_ID" 20 >/dev/null
+assert_eq 'queue priority: updated' 20 "$(queue_item_get "$QUEUE_PATH" "$QUEUE_LOW_ID" priority)"
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-cancel "$QUEUE_CANCEL_ID" >/dev/null
+
+set +e
+env \
+  DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
+  STUB_PLAN="$QUEUE_PLAN" \
+  STUB_INV="$QUEUE_INV" \
+  STUB_COUNT="$QUEUE_COUNT" \
+  LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" \
+  LOOM_SUPERVISOR_CRASH_DELAY_SEC=0 \
+  LOOM_SUPERVISOR_QUOTA_DELAY_SEC=0 \
+  LOOM_SUPERVISOR_MAX_ATTEMPTS=5 \
+  node "$SUPERVISOR" --queue-run >/dev/null 2>&1
+QUEUE_RUN_RC=$?
+set -e
+assert_eq 'queue run: exit' 0 "$QUEUE_RUN_RC"
+assert_contains 'queue run: first dag follows updated priority' "$QUEUE_DAG_LOW" "$QUEUE_INV"
+assert_eq 'queue run: first invocation' "$QUEUE_DAG_LOW" "$(awk 'NR==1 { print $1 }' "$QUEUE_INV")"
+assert_eq 'queue run: low completed' completed "$(queue_item_get "$QUEUE_PATH" "$QUEUE_LOW_ID" status)"
+assert_eq 'queue run: canceled preserved' canceled "$(queue_item_get "$QUEUE_PATH" "$QUEUE_CANCEL_ID" status)"
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-status >"$QUEUE_STATUS_OUT"
+assert_contains 'queue status: prints queue' "queue: $QUEUE_PATH" "$QUEUE_STATUS_OUT"
+
+STALE_QUEUE_DIR="${TMP_DIR}/queue_stale_live_supervisor"
+mkdir -p "$STALE_QUEUE_DIR"
+STALE_QUEUE_PATH="${STALE_QUEUE_DIR}/queue.json"
+STALE_QUEUE_DAG="${STALE_QUEUE_DIR}/dag.json"
+STALE_QUEUE_STATUS="${STALE_QUEUE_DIR}/status.txt"
+write_smoke_dag "$STALE_QUEUE_DAG"
+node -e '
+  const fs = require("fs");
+  const [queuePath, dagPath, supervisorPid] = process.argv.slice(1);
+  fs.writeFileSync(queuePath, JSON.stringify({
+    schemaVersion: 1,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:00.000Z",
+    items: [{
+      id: "stale-worker-live-supervisor",
+      dagPath,
+      args: [],
+      priority: 0,
+      status: "running",
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      workerPid: 999999,
+      supervisorPid: Number(supervisorPid),
+      attempts: 1
+    }]
+  }, null, 2) + "\n");
+' "$STALE_QUEUE_PATH" "$STALE_QUEUE_DAG" "$$"
+env LOOM_SUPERVISOR_QUEUE="$STALE_QUEUE_PATH" node "$SUPERVISOR" --queue-status >"$STALE_QUEUE_STATUS"
+assert_eq 'queue stale live supervisor: stays running' running "$(queue_item_get "$STALE_QUEUE_PATH" stale-worker-live-supervisor status)"
+assert_contains 'queue stale live supervisor: status output' 'status=running' "$STALE_QUEUE_STATUS"
 
 DUP_DIR="${TMP_DIR}/duplicate_refusal"
 mkdir -p "$DUP_DIR"
