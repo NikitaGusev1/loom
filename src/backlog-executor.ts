@@ -383,9 +383,7 @@ export const executeBacklog = async ({
 
     while (activeTasks.length > 0 && !quotaReason) {
       const outcomes = await Promise.allSettled(
-        activeTasks.map(async (task) =>
-          runBacklogTaskAttempt(task, worktreeFor(task).path, retryAttempts),
-        ),
+        activeTasks.map(async (task) => runBacklogTaskAttempt(task, worktreeFor(task).path, retryAttempts)),
       );
 
       const nextRetry: Array<{ task: DAGTask; delayMs: number }> = [];
@@ -428,6 +426,10 @@ export const executeBacklog = async ({
           nextRetry.push({ task, delayMs: decision.delayMs });
         } else if (decision.kind === 'permanent') {
           log.error(`Task ${task.id} permanently failed (${decision.reason})`);
+        } else {
+          throw outcome.reason instanceof Error
+            ? outcome.reason
+            : new Error(`Unexpected backlog task failure for ${task.id}: ${String(outcome.reason)}`);
         }
       }
 
