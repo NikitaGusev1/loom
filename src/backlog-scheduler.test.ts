@@ -2,8 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chooseStartableBacklogTasks,
+  reusableBacklogWorktree,
   summarizeBlockedBacklogPause,
   shouldPauseForNoReadyWork,
+  waitForNextBacklogOutcome,
 } from './backlog-scheduler.js';
 import type { BacklogBlockedTask, DAGTask } from './types.js';
 
@@ -48,6 +50,38 @@ describe('shouldPauseForNoReadyWork', () => {
 
   it('pauses when no ready tasks and no running tasks remain', () => {
     assert.equal(shouldPauseForNoReadyWork([], new Set()), true);
+  });
+});
+
+describe('reusableBacklogWorktree', () => {
+  it('returns existing worktree metadata when both path and branch are present', () => {
+    assert.deepEqual(
+      reusableBacklogWorktree({
+        status: 'in-progress',
+        worktreePath: '/tmp/dag/task-a',
+        worktreeBranch: 'dag/task-a',
+      }),
+      { path: '/tmp/dag/task-a', branch: 'dag/task-a' },
+    );
+  });
+
+  it('does not reuse partial worktree metadata', () => {
+    assert.equal(reusableBacklogWorktree({ status: 'in-progress', worktreePath: '/tmp/dag/task-a' }), undefined);
+  });
+});
+
+describe('waitForNextBacklogOutcome', () => {
+  it('returns fulfilled outcomes with the task id', async () => {
+    const settled = await waitForNextBacklogOutcome(new Map([['task-a', Promise.resolve('ok')]]));
+
+    assert.deepEqual(settled, { status: 'fulfilled', taskId: 'task-a', outcome: 'ok' });
+  });
+
+  it('returns rejected outcomes with the task id', async () => {
+    const failure = new Error('failed');
+    const settled = await waitForNextBacklogOutcome(new Map([['task-a', Promise.reject(failure)]]));
+
+    assert.deepEqual(settled, { status: 'rejected', taskId: 'task-a', reason: failure });
   });
 });
 

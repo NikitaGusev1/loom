@@ -40,8 +40,10 @@ import { describeProjectMemory, loadProjectMemory } from './memory.js';
 import { analyzeBacklogReadiness } from './backlog-readiness.js';
 import {
   chooseStartableBacklogTasks,
+  reusableBacklogWorktree,
   shouldPauseForNoReadyWork,
   summarizeBlockedBacklogPause,
+  waitForNextBacklogOutcome,
 } from './backlog-scheduler.js';
 
 interface BacklogOptions {
@@ -321,20 +323,26 @@ export const executeBacklog = async ({
   let quotaPause: { reason: string; quota: QuotaLimitMetadata } | undefined;
 
   const startTask = async (task: DAGTask): Promise<void> => {
-    const wt = await createWorktreeSafe(task.id, baseBranch, {
-      forceResetIds: config.forceWorktreeResetTaskIds,
-    });
+    const shouldForceReset = config.forceWorktreeResetTaskIds?.includes(task.id) ?? false;
+    const existingWorktree = shouldForceReset ? undefined : reusableBacklogWorktree(state.tasks[task.id]);
+    const wt =
+      existingWorktree ??
+      (await createWorktreeSafe(task.id, baseBranch, {
+        forceResetIds: config.forceWorktreeResetTaskIds,
+      }));
     const ts = new Date().toISOString();
-    emit({
-      kind: 'worktree.created',
-      schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-      ts,
-      dagId,
-      taskId: task.id,
-      worktreePath: wt.path,
-      branch: wt.branch,
-      baseBranch,
-    });
+    if (!existingWorktree) {
+      emit({
+        kind: 'worktree.created',
+        schemaVersion: DAG_EVENT_SCHEMA_VERSION,
+        ts,
+        dagId,
+        taskId: task.id,
+        worktreePath: wt.path,
+        branch: wt.branch,
+        baseBranch,
+      });
+    }
     emitTaskStarted({
       task,
       ts,
@@ -422,33 +430,67 @@ export const executeBacklog = async ({
       continue;
     }
 
-    let settled: { taskId: string; outcome: BacklogTaskOutcome };
-    try {
-      settled = await Promise.race(
-        [...running.entries()].map(([taskId, promise]) => promise.then((outcome) => ({ taskId, outcome }))),
-      );
-    } catch (err) {
-      if (signal?.aborted) return pause('signal aborted');
-      throw err;
-    }
+    const settled = await waitForNextBacklogOutcome(running);
     running.delete(settled.taskId);
 
-    if (settled.outcome.kind === 'succeeded') {
-      const pausedAfterTaskMerge = await mergeCompleted([settled.outcome.task.id]);
+    if (settled.status === 'rejected') {
+      if (signal?.aborted) return pause('signal aborted');
+      const task = taskMap.get(settled.taskId);
+      if (!task) throw new Error(`Missing backlog task for settled outcome ${settled.taskId}`);
+      const decision = decide(readEvents(eventLogPath), task.id);
+      if (decision.kind === 'quota') {
+        quotaPause = {
+          reason: `Quota limit reached while running ${task.id}: ${decision.reason}`,
+          quota: decision.quota,
+        };
+        log.warn(`${quotaPause.reason}; draining ${running.size} already-running task(s) before pause`);
+      } else if (decision.kind === 'retry') {
+        const attempt = (retryAttempts.get(task.id) ?? 0) + 1;
+        retryAttempts.set(task.id, attempt);
+        emitTaskRetry({
+          task,
+          ts: new Date().toISOString(),
+          dagId,
+          layer: layerFor(task.id),
+          emit,
+          attempt,
+          delayMs: decision.delayMs,
+          reason: state.tasks[task.id]?.error ?? 'unknown',
+          previousError: state.tasks[task.id]?.error,
+        });
+        if (quotaPause) {
+          log.warn(`Task ${task.id} retry deferred because quota pause is pending`);
+        } else {
+          log.warn(`Task ${task.id} will retry after ${decision.delayMs}ms`);
+          startRetry(task, decision.delayMs);
+        }
+      } else if (decision.kind === 'permanent') {
+        log.error(`Task ${task.id} permanently failed (${decision.reason})`);
+      } else {
+        throw settled.reason instanceof Error
+          ? settled.reason
+          : new Error(`Unexpected backlog task failure for ${task.id}: ${String(settled.reason)}`);
+      }
+      continue;
+    }
+
+    const outcome = settled.outcome;
+    if (outcome.kind === 'succeeded') {
+      const pausedAfterTaskMerge = await mergeCompleted([outcome.task.id]);
       if (pausedAfterTaskMerge) return pausedAfterTaskMerge;
       saveState(statePath, state);
-    } else if (settled.outcome.kind === 'retry') {
+    } else if (outcome.kind === 'retry') {
       if (quotaPause) {
-        log.warn(`Task ${settled.outcome.task.id} retry deferred because quota pause is pending`);
+        log.warn(`Task ${outcome.task.id} retry deferred because quota pause is pending`);
       } else {
-        log.warn(`Task ${settled.outcome.task.id} will retry after ${settled.outcome.delayMs}ms`);
-        startRetry(settled.outcome.task, settled.outcome.delayMs);
+        log.warn(`Task ${outcome.task.id} will retry after ${outcome.delayMs}ms`);
+        startRetry(outcome.task, outcome.delayMs);
       }
-    } else if (settled.outcome.kind === 'quota') {
-      quotaPause = { reason: settled.outcome.reason, quota: settled.outcome.quota };
-      log.warn(`${settled.outcome.reason}; draining ${running.size} already-running task(s) before pause`);
+    } else if (outcome.kind === 'quota') {
+      quotaPause = { reason: outcome.reason, quota: outcome.quota };
+      log.warn(`${outcome.reason}; draining ${running.size} already-running task(s) before pause`);
     } else {
-      log.error(`Task ${settled.outcome.task.id} permanently failed (${settled.outcome.reason})`);
+      log.error(`Task ${outcome.task.id} permanently failed (${outcome.reason})`);
     }
   }
 
