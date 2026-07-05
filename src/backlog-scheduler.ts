@@ -7,6 +7,18 @@ export type SettledBacklogOutcome<T> =
 export const chooseStartableBacklogTasks = (ready: readonly DAGTask[], activeTaskIds: ReadonlySet<string>): DAGTask[] =>
   ready.filter((task) => !activeTaskIds.has(task.id));
 
+export const pendingMergeBacklogTaskIds = (
+  tasks: readonly DAGTask[],
+  taskStates: Readonly<Record<string, TaskState | undefined>>,
+  activeTaskIds: ReadonlySet<string>,
+): string[] =>
+  tasks
+    .filter((task) => {
+      const taskState = taskStates[task.id];
+      return taskState?.status === 'completed' && taskState.merged !== true && !activeTaskIds.has(task.id);
+    })
+    .map((task) => task.id);
+
 export const reusableBacklogWorktree = (
   taskState: Partial<TaskState> | undefined,
 ): { path: string; branch: string } | undefined => {

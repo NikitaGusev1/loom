@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chooseStartableBacklogTasks,
+  pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
   summarizeBlockedBacklogPause,
   shouldPauseForNoReadyWork,
@@ -50,6 +51,36 @@ describe('shouldPauseForNoReadyWork', () => {
 
   it('pauses when no ready tasks and no running tasks remain', () => {
     assert.equal(shouldPauseForNoReadyWork([], new Set()), true);
+  });
+});
+
+describe('pendingMergeBacklogTaskIds', () => {
+  it('excludes completed tasks that are still running', () => {
+    assert.deepEqual(
+      pendingMergeBacklogTaskIds(
+        [task('settled-but-running'), task('resume-pending')],
+        {
+          'settled-but-running': { status: 'completed', merged: false },
+          'resume-pending': { status: 'completed', merged: false },
+        },
+        new Set(['settled-but-running']),
+      ),
+      ['resume-pending'],
+    );
+  });
+
+  it('excludes already merged tasks', () => {
+    assert.deepEqual(
+      pendingMergeBacklogTaskIds(
+        [task('merged'), task('unmerged')],
+        {
+          merged: { status: 'completed', merged: true },
+          unmerged: { status: 'completed', merged: false },
+        },
+        new Set(),
+      ),
+      ['unmerged'],
+    );
   });
 });
 

@@ -40,6 +40,7 @@ import { describeProjectMemory, loadProjectMemory } from './memory.js';
 import { analyzeBacklogReadiness } from './backlog-readiness.js';
 import {
   chooseStartableBacklogTasks,
+  pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
   shouldPauseForNoReadyWork,
   summarizeBlockedBacklogPause,
@@ -398,9 +399,7 @@ export const executeBacklog = async ({
   for (;;) {
     if (signal?.aborted) return pause('signal aborted');
 
-    const pendingMerge = dag.tasks
-      .filter((task) => state.tasks[task.id]?.status === 'completed' && state.tasks[task.id]?.merged !== true)
-      .map((task) => task.id);
+    const pendingMerge = pendingMergeBacklogTaskIds(dag.tasks, state.tasks, new Set(running.keys()));
     const pausedAfterMerge = await mergeCompleted(pendingMerge);
     if (pausedAfterMerge) return pausedAfterMerge;
 
