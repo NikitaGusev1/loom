@@ -4,6 +4,7 @@ import {
   chooseStartableBacklogTasks,
   pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
+  stopRunningBacklogTasks,
   summarizeBlockedBacklogPause,
   shouldPauseForNoReadyWork,
   waitForNextBacklogOutcome,
@@ -113,6 +114,35 @@ describe('waitForNextBacklogOutcome', () => {
     const settled = await waitForNextBacklogOutcome(new Map([['task-a', Promise.reject(failure)]]));
 
     assert.deepEqual(settled, { status: 'rejected', taskId: 'task-a', reason: failure });
+  });
+});
+
+describe('stopRunningBacklogTasks', () => {
+  it('aborts running tasks, waits for settlement, and clears the running map', async () => {
+    const controller = new AbortController();
+    let settled = false;
+    const running = new Map<string, Promise<string>>([
+      [
+        'slow-task',
+        new Promise((resolve) => {
+          controller.signal.addEventListener(
+            'abort',
+            () => {
+              settled = true;
+              resolve('stopped');
+            },
+            { once: true },
+          );
+        }),
+      ],
+    ]);
+
+    await stopRunningBacklogTasks(running, controller, 'pause');
+
+    assert.equal(controller.signal.aborted, true);
+    assert.equal(controller.signal.reason, 'pause');
+    assert.equal(settled, true);
+    assert.equal(running.size, 0);
   });
 });
 

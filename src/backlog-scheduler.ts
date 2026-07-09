@@ -43,6 +43,17 @@ export const waitForNextBacklogOutcome = async <T>(
   );
 };
 
+export const stopRunningBacklogTasks = async <T>(
+  running: Map<string, Promise<T>>,
+  controller: AbortController,
+  reason: unknown,
+): Promise<void> => {
+  if (running.size === 0) return;
+  if (!controller.signal.aborted) controller.abort(reason);
+  await Promise.allSettled([...running.values()]);
+  running.clear();
+};
+
 export const summarizeBlockedBacklogPause = (blocked: readonly BacklogBlockedTask[]): string => {
   const directFailures = blocked.filter((task) => task.kind === 'permanent-failure').map((task) => task.taskId);
   const dependencyBlocked = blocked.filter((task) => task.kind === 'dependency-blocked').map((task) => task.taskId);

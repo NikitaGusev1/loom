@@ -43,9 +43,11 @@ import {
   pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
   shouldPauseForNoReadyWork,
+  stopRunningBacklogTasks,
   summarizeBlockedBacklogPause,
   waitForNextBacklogOutcome,
 } from './backlog-scheduler.js';
+import { BACKLOG_PAUSE_ABORT_REASON } from './consts.js';
 
 interface BacklogOptions {
   dag: DecompositionDAG;
@@ -59,7 +61,8 @@ type BacklogTaskOutcome =
   | { kind: 'succeeded'; task: DAGTask }
   | { kind: 'retry'; task: DAGTask; delayMs: number }
   | { kind: 'quota'; task: DAGTask; reason: string; quota: QuotaLimitMetadata }
-  | { kind: 'permanent'; task: DAGTask; reason: string };
+  | { kind: 'permanent'; task: DAGTask; reason: string }
+  | { kind: 'cancelled'; task: DAGTask };
 
 const taskLayerMap = (dag: DecompositionDAG): Map<string, number> => {
   const layers = new Map<string, number>();
@@ -165,6 +168,22 @@ export const executeBacklog = async ({
   const memoryStatus = describeProjectMemory(projectMemory, config.disableMemory);
   if (memoryStatus) log.info(memoryStatus);
 
+  const running = new Map<string, Promise<BacklogTaskOutcome>>();
+  const retryAttempts = new Map<string, number>();
+  const taskAttemptController = new AbortController();
+  const taskAttemptSignal = signal
+    ? AbortSignal.any([signal, taskAttemptController.signal])
+    : taskAttemptController.signal;
+
+  const pauseAfterStoppingRunning = async (
+    reason: string,
+    blockedTasks?: BacklogBlockedTask[],
+    quota?: QuotaLimitMetadata,
+  ): Promise<ExecutionState> => {
+    await stopRunningBacklogTasks(running, taskAttemptController, BACKLOG_PAUSE_ABORT_REASON);
+    return pause(reason, blockedTasks, quota);
+  };
+
   const runMergedVerification = async (): Promise<ExecutionState | null> => {
     if (Object.keys(verifyCommands).length === 0) return null;
     const result = await runVerification({
@@ -176,7 +195,7 @@ export const executeBacklog = async ({
       log,
     });
     if (result.ok) return null;
-    return pause(`Backlog merged verification failed: ${formatFailures(result).slice(0, 2000)}`);
+    return pauseAfterStoppingRunning(`Backlog merged verification failed: ${formatFailures(result).slice(0, 2000)}`);
   };
 
   emit({
@@ -194,12 +213,12 @@ export const executeBacklog = async ({
   const mergeCompleted = async (taskIds: string[]): Promise<ExecutionState | null> => {
     if (taskIds.length === 0) return null;
     const baseUnchanged = await verifyBaseUnchanged(baseBranch, baseCommitSha);
-    if (!baseUnchanged) return pause(`Base branch "${baseBranch}" moved before backlog merge`);
+    if (!baseUnchanged) return pauseAfterStoppingRunning(`Base branch "${baseBranch}" moved before backlog merge`);
     const merged = await mergeLayerWorktrees(taskIds, (taskId) => {
       log.success(`Merged ${taskId}`);
       emitWorktreeMerged({ taskId, state, baseBranch, dagId, ts: new Date().toISOString(), emit });
     });
-    if (!merged.success) return pause(`Merge conflict in ${merged.failedAt}: ${merged.conflict}`);
+    if (!merged.success) return pauseAfterStoppingRunning(`Merge conflict in ${merged.failedAt}: ${merged.conflict}`);
     const { stdout } = await exec('git', ['rev-parse', 'HEAD']);
     baseCommitSha = stdout.trim();
     return runMergedVerification();
@@ -210,7 +229,7 @@ export const executeBacklog = async ({
     worktreePath: string,
     retryAttempts: Map<string, number>,
   ): Promise<BacklogTaskOutcome> => {
-    const { usage, trace, failed } = await executeTaskPasses({
+    const { usage, trace, failed, cancelled } = await executeTaskPasses({
       task,
       config,
       state,
@@ -220,9 +239,10 @@ export const executeBacklog = async ({
       dagId,
       layerNum: layerFor(task.id),
       verifyCommands,
-      signal,
+      signal: taskAttemptSignal,
       projectMemory,
     });
+    if (cancelled) return { kind: 'cancelled', task };
     if (failed) {
       const decision = decide(readEvents(eventLogPath), task.id);
       if (decision.kind === 'quota') {
@@ -319,8 +339,6 @@ export const executeBacklog = async ({
     return { kind: 'succeeded', task };
   };
 
-  const running = new Map<string, Promise<BacklogTaskOutcome>>();
-  const retryAttempts = new Map<string, number>();
   let quotaPause: { reason: string; quota: QuotaLimitMetadata } | undefined;
 
   const startTask = async (task: DAGTask): Promise<void> => {
@@ -369,7 +387,7 @@ export const executeBacklog = async ({
       task.id,
       new Promise<BacklogTaskOutcome>((resolve, reject) => {
         const timer = setTimeout(() => {
-          if (signal?.aborted) {
+          if (taskAttemptSignal.aborted) {
             reject(new Error('signal aborted'));
             return;
           }
@@ -384,7 +402,7 @@ export const executeBacklog = async ({
           });
           resolve(runBacklogTaskAttempt(task, worktreePath, retryAttempts));
         }, delayMs);
-        signal?.addEventListener(
+        taskAttemptSignal.addEventListener(
           'abort',
           () => {
             clearTimeout(timer);
@@ -397,7 +415,7 @@ export const executeBacklog = async ({
   };
 
   for (;;) {
-    if (signal?.aborted) return pause('signal aborted');
+    if (signal?.aborted) return pauseAfterStoppingRunning('signal aborted');
 
     const pendingMerge = pendingMergeBacklogTaskIds(dag.tasks, state.tasks, new Set(running.keys()));
     const pausedAfterMerge = await mergeCompleted(pendingMerge);
@@ -433,7 +451,7 @@ export const executeBacklog = async ({
     running.delete(settled.taskId);
 
     if (settled.status === 'rejected') {
-      if (signal?.aborted) return pause('signal aborted');
+      if (signal?.aborted) return pauseAfterStoppingRunning('signal aborted');
       const task = taskMap.get(settled.taskId);
       if (!task) throw new Error(`Missing backlog task for settled outcome ${settled.taskId}`);
       const decision = decide(readEvents(eventLogPath), task.id);
@@ -488,8 +506,10 @@ export const executeBacklog = async ({
     } else if (outcome.kind === 'quota') {
       quotaPause = { reason: outcome.reason, quota: outcome.quota };
       log.warn(`${outcome.reason}; draining ${running.size} already-running task(s) before pause`);
-    } else {
+    } else if (outcome.kind === 'permanent') {
       log.error(`Task ${outcome.task.id} permanently failed (${outcome.reason})`);
+    } else {
+      log.warn(`Task ${outcome.task.id} stopped because the backlog run is pausing`);
     }
   }
 
