@@ -40,6 +40,7 @@ import { describeProjectMemory, loadProjectMemory } from './memory.js';
 import { analyzeBacklogReadiness } from './backlog-readiness.js';
 import {
   chooseStartableBacklogTasks,
+  connectBacklogPauseAbort,
   pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
   shouldPauseForNoReadyWork,
@@ -171,9 +172,8 @@ export const executeBacklog = async ({
   const running = new Map<string, Promise<BacklogTaskOutcome>>();
   const retryAttempts = new Map<string, number>();
   const taskAttemptController = new AbortController();
-  const taskAttemptSignal = signal
-    ? AbortSignal.any([signal, taskAttemptController.signal])
-    : taskAttemptController.signal;
+  connectBacklogPauseAbort(signal, taskAttemptController, BACKLOG_PAUSE_ABORT_REASON);
+  const taskAttemptSignal = taskAttemptController.signal;
 
   const pauseAfterStoppingRunning = async (
     reason: string,

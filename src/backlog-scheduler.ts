@@ -19,6 +19,19 @@ export const pendingMergeBacklogTaskIds = (
     })
     .map((task) => task.id);
 
+export const connectBacklogPauseAbort = (
+  externalSignal: AbortSignal | undefined,
+  controller: AbortController,
+  reason: unknown,
+): void => {
+  if (!externalSignal) return;
+  const abort = (): void => {
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  if (externalSignal.aborted) abort();
+  else externalSignal.addEventListener('abort', abort, { once: true });
+};
+
 export const reusableBacklogWorktree = (
   taskState: Partial<TaskState> | undefined,
 ): { path: string; branch: string } | undefined => {

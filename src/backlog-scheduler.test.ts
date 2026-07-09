@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chooseStartableBacklogTasks,
+  connectBacklogPauseAbort,
   pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
   stopRunningBacklogTasks,
@@ -143,6 +144,19 @@ describe('stopRunningBacklogTasks', () => {
     assert.equal(controller.signal.reason, 'pause');
     assert.equal(settled, true);
     assert.equal(running.size, 0);
+  });
+});
+
+describe('connectBacklogPauseAbort', () => {
+  it('aborts the backlog controller with the neutral pause reason when the external signal aborts', () => {
+    const external = new AbortController();
+    const backlog = new AbortController();
+
+    connectBacklogPauseAbort(external.signal, backlog, 'backlog-pause');
+    external.abort('sigint');
+
+    assert.equal(backlog.signal.aborted, true);
+    assert.equal(backlog.signal.reason, 'backlog-pause');
   });
 });
 
