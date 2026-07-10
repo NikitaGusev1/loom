@@ -62,6 +62,28 @@ describe('ui inbox persistence', () => {
     assert.equal(updated.linkedTaskId, 'task-a');
   });
 
+  it('clears linked metadata with explicit null updates', () => {
+    const item = createInboxItem(projectDir, 'Clear links', {
+      now: () => '2026-07-10T10:00:00.000Z',
+      id: () => 'ui-todo-20260710-000001',
+    });
+
+    updateInboxItemStatus(projectDir, item.id, 'converted', {
+      now: () => '2026-07-10T10:05:00.000Z',
+      linkedDagPath: '/repo/work.json',
+      linkedTaskId: 'task-a',
+    });
+
+    const updated = updateInboxItemStatus(projectDir, item.id, 'converted', {
+      now: () => '2026-07-10T10:06:00.000Z',
+      linkedDagPath: null,
+      linkedTaskId: null,
+    });
+
+    assert.equal(updated.linkedDagPath, null);
+    assert.equal(updated.linkedTaskId, null);
+  });
+
   it('archives an item through the archive helper', () => {
     const item = createInboxItem(projectDir, 'Archive me', {
       now: () => '2026-07-10T10:00:00.000Z',
@@ -85,5 +107,30 @@ describe('ui inbox persistence', () => {
     assert.throws(() => readInbox(projectDir), InboxParseError);
     assert.throws(() => createInboxItem(projectDir, 'New work'), InboxParseError);
     assert.equal(readFileSync(inboxPath, 'utf-8'), '{bad json');
+  });
+
+  it('rejects parseable inbox JSON with missing item fields', () => {
+    const inboxPath = getInboxPath(projectDir);
+    mkdirSync(dirname(inboxPath), { recursive: true });
+    writeFileSync(
+      inboxPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        items: [
+          {
+            id: 'ui-todo-20260710-000001',
+            updatedAt: '2026-07-10T10:00:00.000Z',
+            body: 'Missing createdAt',
+            status: 'open',
+            source: 'ui',
+            linkedDagPath: null,
+            linkedTaskId: null,
+          },
+        ],
+      }),
+      'utf-8',
+    );
+
+    assert.throws(() => readInbox(projectDir), InboxParseError);
   });
 });

@@ -33,6 +33,8 @@ const nowIso = (options?: ClockOptions): string => options?.now?.() ?? new Date(
 
 const nextId = (options?: CreateInboxOptions): string => options?.id?.() ?? `ui-todo-${randomUUID()}`;
 
+const isStringOrNull = (value: unknown): value is string | null => typeof value === 'string' || value === null;
+
 const assertInboxFile = (value: unknown): UiInboxFile => {
   if (!value || typeof value !== 'object') throw new Error('expected object');
   const file = value as { schemaVersion?: unknown; items?: unknown };
@@ -42,10 +44,15 @@ const assertInboxFile = (value: unknown): UiInboxFile => {
     if (!item || typeof item !== 'object') throw new Error('expected inbox item object');
     const candidate = item as Partial<UiInboxItem>;
     if (typeof candidate.id !== 'string') throw new Error('expected item.id string');
+    if (typeof candidate.createdAt !== 'string') throw new Error('expected item.createdAt string');
+    if (typeof candidate.updatedAt !== 'string') throw new Error('expected item.updatedAt string');
     if (typeof candidate.body !== 'string') throw new Error('expected item.body string');
     if (candidate.status !== 'open' && candidate.status !== 'converted' && candidate.status !== 'archived') {
       throw new Error('expected item.status open, converted, or archived');
     }
+    if (candidate.source !== 'ui') throw new Error('expected item.source ui');
+    if (!isStringOrNull(candidate.linkedDagPath)) throw new Error('expected item.linkedDagPath string or null');
+    if (!isStringOrNull(candidate.linkedTaskId)) throw new Error('expected item.linkedTaskId string or null');
   }
   return file as UiInboxFile;
 };
@@ -101,8 +108,8 @@ export const updateInboxItemStatus = (
     ...existing,
     status,
     updatedAt: nowIso(options),
-    linkedDagPath: options?.linkedDagPath ?? existing.linkedDagPath,
-    linkedTaskId: options?.linkedTaskId ?? existing.linkedTaskId,
+    linkedDagPath: options?.linkedDagPath !== undefined ? options.linkedDagPath : existing.linkedDagPath,
+    linkedTaskId: options?.linkedTaskId !== undefined ? options.linkedTaskId : existing.linkedTaskId,
   };
   writeInbox(getInboxPath(projectPath), {
     ...file,
