@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverDags } from './discovery.js';
@@ -123,26 +123,40 @@ describe('discoverDags', () => {
       result.dags.map((dag) => dag.status),
       ['invalid', 'invalid'],
     );
-    assert.equal(result.dags.every((dag) => dag.errors.length === 1), true);
+    assert.equal(
+      result.dags.every((dag) => dag.errors.length === 1),
+      true,
+    );
   });
 
   it('uses state and event artifacts to derive status and counts', () => {
     const dagPath = join(projectDir, 'work.json');
+    const statePath = join(projectDir, 'work.state.json');
+    const eventLogPath = join(projectDir, 'work.events.jsonl');
+    const dagMtime = new Date('2026-07-10T00:00:00.000Z');
+    const stateMtime = new Date('2026-07-10T00:01:00.000Z');
+    const eventLogMtime = new Date('2026-07-10T00:02:00.000Z');
+
     writeFileSync(dagPath, JSON.stringify(dagJson('work')));
     writeFileSync(
-      join(projectDir, 'work.state.json'),
+      statePath,
       JSON.stringify({
         derived: true,
         status: 'running',
         tasks: { 'task-a': { status: 'in-progress' } },
       }),
     );
+    writeFileSync(eventLogPath, '{"kind":"dag.started","schemaVersion":1}\n');
+    utimesSync(dagPath, dagMtime, dagMtime);
+    utimesSync(statePath, stateMtime, stateMtime);
+    utimesSync(eventLogPath, eventLogMtime, eventLogMtime);
 
     const result = discoverDags(projectDir);
 
+    assert.equal(result.dags.length, 1);
     assert.equal(result.dags[0].status, 'running');
     assert.equal(result.dags[0].totalTasks, 1);
     assert.equal(result.dags[0].runningTasks, 1);
-    assert.equal(result.dags[0].updatedAt !== null, true);
+    assert.equal(result.dags[0].updatedAt, eventLogMtime.toISOString());
   });
 });

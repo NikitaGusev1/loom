@@ -96,47 +96,45 @@ export const discoverDags = (projectPath: string): DiscoverDagsResult => {
     };
   }
 
-  const dags = candidates
-    .sort()
-    .map((path): UiDagListItem => {
-      const eventLogPath = getEventLogPath(path);
-      const statePath = getStatePath(path);
-      const base = {
-        path,
-        relativePath: relative(projectPath, path).split(sep).join('/'),
-        eventLogPath,
-        statePath,
-        updatedAt: maxIso([isoMtime(path), isoMtime(eventLogPath), isoMtime(statePath)]),
-      };
+  const dags = candidates.sort().map((path): UiDagListItem => {
+    const eventLogPath = getEventLogPath(path);
+    const statePath = getStatePath(path);
+    const base = {
+      path,
+      relativePath: relative(projectPath, path).split(sep).join('/'),
+      eventLogPath,
+      statePath,
+      updatedAt: maxIso([isoMtime(path), isoMtime(eventLogPath), isoMtime(statePath)]),
+    };
 
-      try {
-        const dag = validateDAG(JSON.parse(readFileSync(path, 'utf-8')));
-        const counts = stateCounts(statePath);
-        return {
-          ...base,
-          id: dag.meta.id,
-          title: dag.meta.source.title,
-          status: counts?.status ?? 'not-started',
-          totalTasks: dag.tasks.length,
-          completedTasks: counts?.completedTasks ?? 0,
-          failedTasks: counts?.failedTasks ?? 0,
-          runningTasks: counts?.runningTasks ?? 0,
-          errors: [],
-        };
-      } catch (err) {
-        return {
-          ...base,
-          id: base.relativePath,
-          title: base.relativePath,
-          status: 'invalid',
-          totalTasks: 0,
-          completedTasks: 0,
-          failedTasks: 0,
-          runningTasks: 0,
-          errors: [{ scope: 'dag', path, message: toMessage(err) }],
-        };
-      }
-    });
+    try {
+      const dag = validateDAG(JSON.parse(readFileSync(path, 'utf-8')));
+      const counts = stateCounts(statePath);
+      return {
+        ...base,
+        id: dag.meta.id,
+        title: dag.meta.source.title,
+        status: counts?.status ?? 'not-started',
+        totalTasks: dag.tasks.length,
+        completedTasks: counts?.completedTasks ?? 0,
+        failedTasks: counts?.failedTasks ?? 0,
+        runningTasks: counts?.runningTasks ?? 0,
+        errors: [],
+      };
+    } catch (err) {
+      return {
+        ...base,
+        id: base.relativePath,
+        title: base.relativePath,
+        status: 'invalid',
+        totalTasks: 0,
+        completedTasks: 0,
+        failedTasks: 0,
+        runningTasks: 0,
+        errors: [{ scope: 'dag', path, message: toMessage(err) }],
+      };
+    }
+  });
 
   return { projectPath, dags, errors };
 };
