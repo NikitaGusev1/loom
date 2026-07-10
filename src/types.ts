@@ -1,5 +1,12 @@
 // DAG Schema Types (mirrors task-decomposer.md JSON schema)
 
+export interface ProjectContext {
+  sharedComponents?: string;
+  conventions?: string[];
+  figmaToolset?: string[];
+  themeTokensDoc?: string;
+}
+
 export interface DAGMeta {
   id: string;
   source: {
@@ -18,6 +25,18 @@ export interface DAGMeta {
     checksRun: string[];
     allPassed: boolean;
     details?: Record<string, { passed: boolean; notes: string }>;
+  };
+  projectContext?: ProjectContext;
+  reviewVerdict?: {
+    status: 'READY' | 'NEEDS_REVISION' | 'BLOCKED';
+    reviewedAt: string;
+    gitCommit: string;
+    findings: Array<{
+      id: string;
+      dimension: string;
+      severity: string;
+      summary: string;
+    }>;
   };
 }
 

@@ -59,6 +59,74 @@ describe('validateDAG happy path', () => {
     const parsed = validateDAG(dag);
     assert.equal(parsed.tasks.length, 4);
   });
+
+  it('accepts optional projectContext and reviewVerdict metadata', () => {
+    const dag = makeDag([makeTask('a')], [{ layer: 0, taskIds: ['a'] }]);
+    const meta = dag.meta as typeof dag.meta & {
+      projectContext?: unknown;
+      reviewVerdict?: unknown;
+    };
+    meta.projectContext = {
+      sharedComponents: 'src/components/common: Button',
+      conventions: ['Use theme tokens'],
+      figmaToolset: ['figma-console'],
+      themeTokensDoc: '.claude/references/theme.md',
+    };
+    meta.reviewVerdict = {
+      status: 'READY',
+      reviewedAt: '2026-01-01T00:00:00.000Z',
+      gitCommit: 'abc1234',
+      findings: [{ id: 'F1', dimension: 'contracts', severity: 'LOW', summary: 'ok' }],
+    };
+
+    const parsed = validateDAG(dag);
+    assert.equal(parsed.meta.projectContext?.themeTokensDoc, '.claude/references/theme.md');
+    assert.equal(parsed.meta.reviewVerdict?.status, 'READY');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Input sources
+// ---------------------------------------------------------------------------
+
+describe('input sources', () => {
+  it('accepts an input sourced from a declared dependency', () => {
+    const a = makeTask('a');
+    const b = makeTask('b', ['a']);
+    b.contracts.inputs = { out: { source: 'a', type: 'file' } };
+    const dag = makeDag(
+      [a, b],
+      [
+        { layer: 0, taskIds: ['a'] },
+        { layer: 1, taskIds: ['b'] },
+      ],
+    );
+
+    assert.equal(validateDAG(dag).tasks.length, 2);
+  });
+
+  it('rejects an input source that is not a known task', () => {
+    const b = makeTask('b');
+    b.contracts.inputs = { out: { source: 'ghost', type: 'file' } };
+    const dag = makeDag([b], [{ layer: 0, taskIds: ['b'] }]);
+
+    assert.throws(() => validateDAG(dag), /input "out" has source "ghost" which is not a known task/);
+  });
+
+  it('rejects an input source that is not declared as a dependency', () => {
+    const a = makeTask('a');
+    const b = makeTask('b');
+    b.contracts.inputs = { out: { source: 'a', type: 'file' } };
+    const dag = makeDag(
+      [a, b],
+      [
+        { layer: 0, taskIds: ['a'] },
+        { layer: 1, taskIds: ['b'] },
+      ],
+    );
+
+    assert.throws(() => validateDAG(dag), /must be one of the task's dependencies/);
+  });
 });
 
 // ---------------------------------------------------------------------------

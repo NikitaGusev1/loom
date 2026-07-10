@@ -436,13 +436,13 @@ git commit -m "feat: add finished-run diff view"
 - Modify: `src/contracts.ts`
 - Modify: `src/contracts.test.ts`
 
-- [ ] **Step 1: Add `ProjectContext` and `reviewVerdict` types**
+- [x] **Step 1: Add `ProjectContext` and `reviewVerdict` types**
 
 Adapt upstream `ProjectContext` and optional `DAGMeta.reviewVerdict`.
 
 Keep all fields optional so old DAGs validate.
 
-- [ ] **Step 2: Add Zod schema coverage**
+- [x] **Step 2: Add Zod schema coverage**
 
 Update `src/validation.ts` to accept optional:
 
@@ -452,7 +452,7 @@ Update `src/validation.ts` to accept optional:
 - `meta.projectContext.themeTokensDoc`
 - `meta.reviewVerdict`
 
-- [ ] **Step 3: Enforce source dependency rule**
+- [x] **Step 3: Enforce source dependency rule**
 
 Update validation so every input source:
 
@@ -461,13 +461,13 @@ Update validation so every input source:
 
 This is intentionally breaking for invalid DAGs.
 
-- [ ] **Step 4: Route contract verification by source**
+- [x] **Step 4: Route contract verification by source**
 
 Adapt upstream contract checks so an input resolves only through `taskMap.get(input.source)` and that producer's like-named output.
 
 Do not satisfy an input from an unrelated same-named output.
 
-- [ ] **Step 5: Add tests**
+- [x] **Step 5: Add tests**
 
 Cover:
 
@@ -477,7 +477,7 @@ Cover:
 - invalid input source not listed in dependencies
 - same output name on unrelated task does not satisfy contract
 
-- [ ] **Step 6: Verify**
+- [x] **Step 6: Verify**
 
 Run:
 
@@ -489,7 +489,7 @@ node --test build/contracts.test.js
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/types.ts src/validation.ts src/validation.test.ts src/contracts.ts src/contracts.test.ts

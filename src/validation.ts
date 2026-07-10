@@ -28,6 +28,29 @@ const dagMetaSchema = z.object({
       )
       .optional(),
   }),
+  projectContext: z
+    .object({
+      sharedComponents: z.string().optional(),
+      conventions: z.array(z.string()).optional(),
+      figmaToolset: z.array(z.string()).optional(),
+      themeTokensDoc: z.string().optional(),
+    })
+    .optional(),
+  reviewVerdict: z
+    .object({
+      status: z.enum(['READY', 'NEEDS_REVISION', 'BLOCKED']),
+      reviewedAt: z.string(),
+      gitCommit: z.string(),
+      findings: z.array(
+        z.object({
+          id: z.string(),
+          dimension: z.string(),
+          severity: z.string(),
+          summary: z.string(),
+        }),
+      ),
+    })
+    .optional(),
 });
 
 const fileOutputSchema = z.object({
@@ -142,6 +165,24 @@ export const validateDAG = (json: unknown): DecompositionDAG => {
       if (!taskIds.has(depId)) {
         throw new Error(
           `Task "${task.id}" depends on unknown task "${depId}". ` + `Available tasks: ${[...taskIds].join(', ')}`,
+        );
+      }
+    }
+  }
+
+  for (const task of parsed.tasks) {
+    const deps = new Set(task.dependencies);
+    for (const [inputName, input] of Object.entries(task.contracts.inputs)) {
+      if (!taskIds.has(input.source)) {
+        throw new Error(
+          `Task "${task.id}" input "${inputName}" has source "${input.source}" which is not a known task. ` +
+            `Available tasks: ${[...taskIds].join(', ')}`,
+        );
+      }
+      if (!deps.has(input.source)) {
+        throw new Error(
+          `Task "${task.id}" input "${inputName}" is sourced from "${input.source}", ` +
+            `which must be one of the task's dependencies (declared dependencies: ${[...deps].join(', ') || 'none'})`,
         );
       }
     }

@@ -48,6 +48,84 @@ interface OutputBinding {
   output: ContractOutput;
 }
 
+const checkConsumerInputs = (
+  consumerId: string,
+  taskMap: Map<string, DAGTask>,
+  completedTaskIds?: Set<string>,
+): BrokenContract[] => {
+  const brokenContracts: BrokenContract[] = [];
+  const consumer = taskMap.get(consumerId);
+  if (!consumer) return brokenContracts;
+
+  for (const [inputName, input] of Object.entries(consumer.contracts.inputs)) {
+    if (completedTaskIds && !completedTaskIds.has(input.source)) {
+      brokenContracts.push({
+        taskId: consumerId,
+        inputName,
+        expectedFrom: input.source,
+        outputName: inputName,
+        outputType: input.type ?? 'unknown',
+        reason: `Source task "${input.source}" is not completed`,
+      });
+      continue;
+    }
+
+    const producer = taskMap.get(input.source);
+    const output = producer?.contracts.outputs[inputName];
+    if (!output) {
+      brokenContracts.push({
+        taskId: consumerId,
+        inputName,
+        expectedFrom: input.source,
+        outputName: inputName,
+        outputType: input.type ?? 'unknown',
+        reason: producer
+          ? `Source task "${input.source}" does not produce output "${inputName}"`
+          : `Input source "${input.source}" is not a known task`,
+      });
+      continue;
+    }
+
+    if (isFileOutput(output)) {
+      if (!existsSync(output.path)) {
+        brokenContracts.push({
+          taskId: consumerId,
+          inputName,
+          expectedFrom: input.source,
+          outputName: inputName,
+          outputType: `file:${output.mediaType ?? 'other'}`,
+          reason: `File "${output.path}" does not exist`,
+        });
+      }
+      continue;
+    }
+
+    if (isExportOutput(output)) {
+      if (!exportExists(output)) {
+        brokenContracts.push({
+          taskId: consumerId,
+          inputName,
+          expectedFrom: input.source,
+          outputName: inputName,
+          outputType: output.exportKind,
+          reason: `Export "${output.exportName}" (${output.exportKind}) not found in "${output.file}"`,
+        });
+      }
+    }
+  }
+
+  return brokenContracts;
+};
+
+export const createConsumerInputVerifier = (
+  taskMap: Map<string, DAGTask>,
+): ((consumerId: string) => ContractVerificationResult) => {
+  return (consumerId) => {
+    const brokenContracts = checkConsumerInputs(consumerId, taskMap);
+    return { passed: brokenContracts.length === 0, brokenContracts };
+  };
+};
+
 export const verifyLayerContracts = async (
   completedTaskIds: string[],
   nextLayerTaskIds: string[],
@@ -55,66 +133,10 @@ export const verifyLayerContracts = async (
 ): Promise<ContractVerificationResult> => {
   const brokenContracts: BrokenContract[] = [];
   const taskMap = new Map(dag.tasks.map((t) => [t.id, t]));
-
-  const outputMap = new Map<string, OutputBinding>();
-  for (const taskId of completedTaskIds) {
-    const task = taskMap.get(taskId);
-    if (!task) continue;
-    for (const [outputName, output] of Object.entries(task.contracts.outputs)) {
-      outputMap.set(outputName, { producerId: taskId, output });
-    }
-  }
+  const completed = new Set(completedTaskIds);
 
   for (const nextTaskId of nextLayerTaskIds) {
-    const nextTask = taskMap.get(nextTaskId);
-    if (!nextTask) continue;
-
-    for (const [inputName, input] of Object.entries(nextTask.contracts.inputs)) {
-      const binding = outputMap.get(inputName);
-      if (!binding) {
-        brokenContracts.push({
-          taskId: nextTaskId,
-          inputName,
-          expectedFrom: input.source,
-          outputName: inputName,
-          outputType: input.type ?? 'unknown',
-          reason: `No completed task produces output "${inputName}"`,
-        });
-        continue;
-      }
-
-      const { output, producerId } = binding;
-
-      if (isFileOutput(output)) {
-        if (!existsSync(output.path)) {
-          brokenContracts.push({
-            taskId: nextTaskId,
-            inputName,
-            expectedFrom: producerId,
-            outputName: inputName,
-            outputType: `file:${output.mediaType ?? 'other'}`,
-            reason: `File "${output.path}" does not exist`,
-          });
-        }
-        continue;
-      }
-
-      if (isExportOutput(output)) {
-        if (!exportExists(output)) {
-          brokenContracts.push({
-            taskId: nextTaskId,
-            inputName,
-            expectedFrom: producerId,
-            outputName: inputName,
-            outputType: output.exportKind,
-            reason: `Export "${output.exportName}" (${output.exportKind}) not found in "${output.file}"`,
-          });
-        }
-        continue;
-      }
-
-      // behavioral outputs have no static artifact to verify
-    }
+    brokenContracts.push(...checkConsumerInputs(nextTaskId, taskMap, completed));
   }
 
   return {
