@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 import { validateDAG } from '../validation.js';
 import { getEventLogPath } from '../events/log.js';
 import { getStatePath } from '../state.js';
@@ -21,15 +21,15 @@ const IGNORED_DIRS = new Set([
   '.superpowers',
 ]);
 
+const IGNORED_FILENAMES = new Set(['package.json', 'package-lock.json', 'tsconfig.json']);
+
 const toMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 const isCandidateDagPath = (path: string): boolean =>
   path.endsWith('.json') &&
   !path.endsWith('.state.json') &&
   !path.endsWith('.supervisor.json') &&
-  !path.endsWith('package.json') &&
-  !path.endsWith('package-lock.json') &&
-  !path.endsWith('tsconfig.json');
+  !IGNORED_FILENAMES.has(basename(path));
 
 const walkJson = (dir: string, out: string[]): void => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

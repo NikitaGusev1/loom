@@ -63,11 +63,45 @@ describe('discoverDags', () => {
     assert.equal(result.dags[0].statePath.endsWith('work.state.json'), true);
   });
 
-  it('ignores generated and dependency directories', () => {
-    mkdirSync(join(projectDir, 'node_modules', 'pkg'), { recursive: true });
-    mkdirSync(join(projectDir, 'build'), { recursive: true });
-    writeFileSync(join(projectDir, 'node_modules', 'pkg', 'ignored.json'), JSON.stringify(dagJson('ignored')));
-    writeFileSync(join(projectDir, 'build', 'ignored.json'), JSON.stringify(dagJson('ignored')));
+  it('discovers DAGs whose names only end with ignored config filename text', () => {
+    writeFileSync(join(projectDir, 'feature-package.json'), JSON.stringify(dagJson('feature-package')));
+
+    const result = discoverDags(projectDir);
+
+    assert.deepEqual(
+      result.dags.map((dag) => dag.id),
+      ['feature-package'],
+    );
+  });
+
+  it('ignores exact config filenames', () => {
+    writeFileSync(join(projectDir, 'package.json'), JSON.stringify(dagJson('package')));
+    writeFileSync(join(projectDir, 'package-lock.json'), JSON.stringify(dagJson('package-lock')));
+    writeFileSync(join(projectDir, 'tsconfig.json'), JSON.stringify(dagJson('tsconfig')));
+    writeFileSync(join(projectDir, 'real.json'), JSON.stringify(dagJson('real')));
+
+    const result = discoverDags(projectDir);
+
+    assert.deepEqual(
+      result.dags.map((dag) => dag.id),
+      ['real'],
+    );
+  });
+
+  it('ignores generated, repository, tool, and dependency directories', () => {
+    const ignoredDirs = [
+      '.git',
+      '.worktrees',
+      'node_modules',
+      'build',
+      '.dag-executor',
+      '.loom-supervisor',
+      '.superpowers',
+    ];
+    for (const dir of ignoredDirs) {
+      mkdirSync(join(projectDir, dir, 'nested'), { recursive: true });
+      writeFileSync(join(projectDir, dir, 'nested', 'ignored.json'), JSON.stringify(dagJson(`ignored-${dir}`)));
+    }
     writeFileSync(join(projectDir, 'real.json'), JSON.stringify(dagJson('real')));
 
     const result = discoverDags(projectDir);
