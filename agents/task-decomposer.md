@@ -70,7 +70,7 @@ a topological sort.
 ### Step 3: Define Contracts
 
 For each task, specify:
-- **Inputs**: `{name: {type?, source}}` — `name` MUST match an output name produced by a dependency. `source` describes which task it comes from.
+- **Inputs**: `{name: {type?, source}}` — `source` MUST be one of this task's `dependencies`, and `name` MUST match an output that `source` task produces. The executor resolves each input strictly through `source` -> that producer's like-named output, never by output name across unrelated tasks. `validateDAG` rejects a `source` that is not a declared dependency.
 - **Outputs**: `{name: ContractOutput}` — pick exactly ONE of these shapes per output:
   1. `{kind: "file", path, mediaType?, description}` — task writes/modifies a concrete file. Verified by `existsSync(path)` post-execution. Use for markdown, JSON artifacts, agent files, reports, etc. Required for any output under `.claude/ai/` (gitignored — executor force-adds).
   2. `{kind: "export", file, exportName, exportKind, description}` — task adds a named TS export. Verified by grepping `export <exportKind> <exportName>` in `file`. `exportKind` ∈ `type|interface|const|function|class|component`.
@@ -91,10 +91,11 @@ For each task, include ONLY:
   This is critical — layout specs describe the flex structure, nesting, spacing,
   and alignment that the agent must reproduce faithfully. Without it, agents
   guess at layout and produce mispositioned elements.
-- **Shared component discovery** (for UI tasks): Search `src/components/common/` for
-  shared components the task could reuse (e.g. PrimaryButton, SecondaryButton, ThemedText,
-  ThemedView, BottomSheet). Include these in `relatedPatterns` with `relevance` explaining
-  how they should be used. This prevents agents from recreating existing components.
+- **Shared component discovery** (for UI tasks): The repo's reusable-component inventory is
+  run-wide context. Capture it once in `meta.projectContext.sharedComponents`, not in every
+  task. In a task's `relatedPatterns`, include only task-specific components or patterns this
+  particular task should model after. Do not re-list the whole shared-component roster in
+  every UI task.
 
 ### Step 5: Define Completion Criteria
 
@@ -145,6 +146,12 @@ The output must be a JSON object with exactly these top-level keys:
   - `gitCommit` (string): Short commit hash
   - `branch` (string): Current branch name
   - `qualityReport` (object): `iterations`, `checksRun` (array of 5 check names), `allPassed` (boolean), `details` (object with per-check `passed`+`notes`)
+  - `projectContext` (object, optional but strongly recommended): run-wide repo facts derived once and inlined into every task prompt. Resolve cheap repeated facts into concise content; keep large references as pointers:
+    - `sharedComponents` (string, optional): concise curated inventory of reusable UI components and locations. Omit for non-UI work.
+    - `conventions` (array of strings, optional): project-level conventions that apply across tasks, distinct from a task's own `context.conventions`.
+    - `figmaToolset` (array of strings, optional): Figma MCP tool names only when the repo uses non-default tooling.
+    - `themeTokensDoc` (string, optional): path to the full design-token reference. This is a pointer, not an inline token dump. Verify paths before emitting them.
+  - `reviewVerdict` (object, optional): latest semantic DAG/code-review verdict for this DAG branch: `status` (`"READY"|"NEEDS_REVISION"|"BLOCKED"`), `reviewedAt`, `gitCommit`, and `findings` (`{id, dimension, severity, summary}[]`). The decomposer does not normally create this field; review workflow writes it back onto `meta`.
 
 - `tasks`: Array of task objects, each with:
   - `id` (string): Format `task-XXXX` (short alphanumeric)
@@ -152,13 +159,13 @@ The output must be a JSON object with exactly these top-level keys:
   - `description` (string): 1-3 sentences max
   - `dependencies` (array of strings): Task IDs that must complete first
   - `contracts` (object):
-    - `inputs`: map of name → `{type?: string, source: string}`. `name` MUST match an output name produced by a dependency.
+    - `inputs`: map of name → `{type?: string, source: string}`. `source` MUST be one of the task's `dependencies`, and `name` MUST match an output produced by that `source` task. The executor routes input `name` to `source`'s output of the same name; validation rejects a `source` not listed in `dependencies`.
     - `outputs`: map of name → discriminated `ContractOutput`. Pick exactly one shape per output:
       - **File output** (the task writes/modifies a file): `{kind: "file", path: "<relative path>", mediaType?: "json"|"markdown"|"yaml"|"text"|"typescript"|"shell"|"other", description: "..."}`. `path` is verified by `fs.existsSync` post-execution. Files under `.claude/ai/` are gitignored and will be force-added by the executor.
       - **Export output** (the task adds a named TypeScript/JS export to a file): `{kind: "export", file: "<path>", exportName: "<identifier>", exportKind: "type"|"interface"|"const"|"function"|"class"|"component", description: "..."}`. Verified by regex-grep for `export <kind> <exportName>` in the file.
       - **Behavioral output** (no static artifact — invariants, deletions, side effects): `{kind: "behavioral", description: "..."}`. NOT verified automatically; relies on `completionCriteria.automated` to catch failures.
     - Use `file` for any markdown/JSON artifact (e.g. agent files, reports, decomposition JSON). Use `export` for TS additions that downstream tasks import. Use `behavioral` sparingly — only when no file/export proxy exists.
-  - `context` (object): `files` (array of paths), optional `figmaRef` (object with optional `nodeId`, optional `url`, optional `hints` array — pointers to Figma design, NOT token values), optional `layoutSpec` (string — component hierarchy with flex directions, spacing, alignment from the Figma design; include for any task that creates or modifies styled components), `conventions` (array), `relatedPatterns` (array of `{file, relevance}` — for UI tasks, explicitly include shared components from `src/components/common/` that the task should consider reusing)
+  - `context` (object): `files` (array of paths), optional `figmaRef` (object with optional `nodeId`, optional `url`, optional `hints` array — pointers to Figma design, NOT token values), optional `layoutSpec` (string — component hierarchy with flex directions, spacing, alignment from the Figma design; include for any task that creates or modifies styled components), `conventions` (array — task-specific conventions; run-wide conventions belong in `meta.projectContext.conventions`), `relatedPatterns` (array of `{file, relevance}` — task-specific patterns this task should model after; do not duplicate the run-wide shared-component roster here)
   - `completionCriteria` (object): `automated` (array of strings), `manual` (array of strings)
   - `estimatedScope` (string): "single-component" | "multi-file" | "cross-module"
   - `weight` (string): "trivial" | "standard" | "heavy" — assign based on:

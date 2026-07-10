@@ -1,10 +1,14 @@
-// executeDAG — the layer loop. Per layer: trivial batch on main, worktree tasks
-// in parallel (retry loop over the decide() policy), base-unchanged check, merge,
-// Tier-2 merged-whole verification, next-layer contract check. Any failure pauses
-// (exit 2, resumable with --resume).
+// executeDAG — the ready-work loop. A task starts as soon as its dependencies
+// complete (no layer barrier); each producer merges eagerly through a serialized
+// writer lane so a consumer branches off a base that already contains it. Layers
+// are retained only as Tier-2 verification checkpoints (fired when a layer's last
+// task lands), not as start gates; input contracts verify per-edge at unblock.
+// Any failure (base-moved, merge conflict, broken contract, Tier-2, all-permanent,
+// quota) pauses (exit 2, resumable with --resume).
 //
-// The per-task / per-batch execution paths and their shared plumbing live in
-// src/executor/ (session, git-ops, noop-gate, task-passes, trivial-batch).
+// Scheduling bookkeeping lives in src/scheduler/ (ready, writer-lane); the
+// per-task execution path and shared plumbing live in src/executor/ (session,
+// git-ops, noop-gate, task-passes, deps).
 
 import { existsSync } from 'node:fs';
 import type {
@@ -15,11 +19,14 @@ import type {
   ExecutionLayer,
   QuotaLimitMetadata,
 } from './types.js';
-import type { DagEvent } from './events/types.js';
+import type { DagEvent, DagPauseCause } from './events/types.js';
 import { exec } from './exec.js';
 import { createState, loadStateFromEvents, saveState, getStatePath, emitHelper } from './state.js';
-import { createWorktreeSafe, mergeLayerWorktrees, acquireLock, verifyBaseUnchanged } from './worktree.js';
-import { verifyLayerContracts, resolveOutputFiles } from './contracts.js';
+import { acquireLock } from './worktree.js';
+import { createConsumerInputVerifier, resolveOutputFiles } from './contracts.js';
+import { buildChildren, markCompleted, reconstructReadyState } from './scheduler/ready.js';
+import { createWriterLane, landWorktree, type LandWorktreeDeps } from './scheduler/writer-lane.js';
+import { MAX_GLOBAL_SLOTS } from './consts.js';
 import { createLogger } from './logger.js';
 import { getEventLogPath, readEvents } from './events/log.js';
 import {
@@ -34,14 +41,13 @@ import { resolveVerifyCommands } from './verify/detect.js';
 import { runVerification, formatFailures, firstFailedKind } from './verify/run.js';
 import { DAG_EVENT_SCHEMA_VERSION } from './events/types.js';
 import { pendingMergeTaskIds } from './state/pending-merge.js';
-import { executeTaskPasses } from './executor/task-passes.js';
-import { executeTrivialBatch } from './executor/trivial-batch.js';
-import { settleNoOpGate } from './executor/noop-gate.js';
-import { getCurrentBranch, getFilesModified } from './executor/git-ops.js';
+import { getCurrentBranch, getHeadSha } from './executor/git-ops.js';
 import { describeProjectMemory, loadProjectMemory } from './memory.js';
+import { defaultExecutorDeps, type ExecutorDeps } from './executor/deps.js';
 
-export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionState> => {
+export const executeDAG = async (options: ExecuteOptions & { deps?: ExecutorDeps }): Promise<ExecutionState> => {
   const { dag, config, signal, resume, rerunTaskIds } = options;
+  const deps = options.deps ?? defaultExecutorDeps;
   const log = createLogger();
   const statePath = getStatePath(config.dagPath);
   const eventLogPath = getEventLogPath(config.dagPath);
@@ -115,7 +121,6 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
     state = createState(dag, config);
   }
   state.status = 'running';
-  const startLayer = state.currentLayer;
 
   // Acquire dag-level lock to prevent concurrent invocations on the same dagPath.
   acquireLock(config.dagPath);
@@ -127,7 +132,12 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
 
   // Centralizes emit(dag.paused) → saveState ordering: no pause site can
   // drift out of sync with the reducer's derived state.
-  const pauseDag = (reason: string, currentLayer: number, quota?: QuotaLimitMetadata): ExecutionState => {
+  const pauseDag = (
+    cause: DagPauseCause,
+    reason: string,
+    currentLayer: number,
+    quota?: QuotaLimitMetadata,
+  ): ExecutionState => {
     emit({
       kind: 'dag.paused',
       schemaVersion: DAG_EVENT_SCHEMA_VERSION,
@@ -136,20 +146,21 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
       dagId,
       reason,
       currentLayer,
+      cause,
       quota,
     });
     saveState(statePath, state);
     return state;
   };
 
-  const [baseBranch, { stdout: baseCommitRaw }, { stdout: statusOutput }] = await Promise.all([
+  const [baseBranch, baseHead, { stdout: statusOutput }] = await Promise.all([
     getCurrentBranch(),
-    exec('git', ['rev-parse', 'HEAD']),
+    getHeadSha(),
     exec('git', ['status', '--porcelain']),
   ]);
-  // Mutable: the trivial batch commits directly on the base branch, legitimately
-  // advancing HEAD, so we re-record it after each batch (see the trivial block).
-  let baseCommitSha = baseCommitRaw.trim();
+  // Mutable: each eager land merges onto the base branch, advancing HEAD, so we
+  // re-record it after every land (see landAndRoute).
+  let baseCommitSha = baseHead;
 
   // Resolve the target repo's verification commands ONCE (cwd = repo root, where
   // package.json lives). The same resolved set is reused for Tier-1 (worktrees)
@@ -208,7 +219,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
       durationMs: Math.max(0, Date.now() - startMs),
     });
     log.error(`Layer ${lyr.layer} failed merged-whole verification. State saved. Resume with --resume after fixing.`);
-    return pauseDag(`Layer ${lyr.layer} failed merged-whole verification`, lyr.layer);
+    return pauseDag('verification-failed', `Layer ${lyr.layer} failed merged-whole verification`, lyr.layer);
   };
 
   const dagStartMs = Date.now();
@@ -220,6 +231,7 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
     dagId,
     branch: baseBranch,
     resume: resume ?? false,
+    baseStartSha: baseHead,
   });
 
   log.info(`Base branch: ${baseBranch}`);
@@ -240,485 +252,462 @@ export const executeDAG = async (options: ExecuteOptions): Promise<ExecutionStat
     log.info(`  Layer ${layer.layer}: ${layer.taskIds.length} task(s) — ${taskNames}`);
   }
 
-  const lastLayerNum = dag.executionLayers[dag.executionLayers.length - 1].layer;
-  let layerStartMs = 0;
+  // ---------------------------------------------------------------------------
+  // Ready-work scheduling loop (replaces the layer-by-layer start barrier). A task
+  // starts as soon as its dependencies complete; each producer merges eagerly
+  // through a serialized writer lane so a consumer branches off a base that already
+  // contains it; the expensive Tier-2 suite still runs per-layer (layers retained
+  // as verification checkpoints, dropped as start gates); contracts verify per-edge
+  // at the moment a producer unblocks a consumer.
+  // ---------------------------------------------------------------------------
 
-  for (const layer of dag.executionLayers) {
-    if (layer.layer < startLayer) continue;
+  type Settled =
+    | { taskId: string; outcome: 'completed'; filesModified: string[]; usage?: TaskUsage }
+    | { taskId: string; outcome: 'permanent'; reason: string }
+    | { taskId: string; outcome: 'quota'; reason: string; quota: QuotaLimitMetadata }
+    // An unexpected throw inside runOneTask (worktree-create, getFilesModified,
+    // settleNoOp). Caught so the inFlight promise never rejects -- the loop converts
+    // it to a resumable pause instead of letting Promise.race reject and crash.
+    | { taskId: string; outcome: 'error'; error: string };
 
-    if (signal?.aborted) {
-      log.warn('Interrupted between layers. State saved.');
-      return pauseDag('signal aborted', layer.layer);
+  const taskLayer = new Map<string, number>();
+  const layerById = new Map<number, ExecutionLayer>();
+  for (const lyr of dag.executionLayers) {
+    layerById.set(lyr.layer, lyr);
+    for (const id of lyr.taskIds) taskLayer.set(id, lyr.layer);
+  }
+
+  const children = buildChildren(dag);
+  const { unmetDeps, ready: readySeed, inFlightToReset, failedRunnable } = reconstructReadyState(state, dag);
+
+  // On --resume, a task that ended 'failed' may be transiently retryable: a 1st/2nd
+  // task.timeout still in backoff, or a transient task.failed that crashed before its
+  // in-process retry fired. Consult the retry policy per failed task: a 'retry'
+  // verdict re-enters the run; a 'permanent' verdict stays excluded so the DAG pauses
+  // all-tasks-failed rather than looping on doomed work.
+  const retryableFailed: string[] = [];
+  if (resume && failedRunnable.length > 0) {
+    const priorEvents = readEvents(eventLogPath);
+    for (const id of failedRunnable) {
+      if (decide(priorEvents, id).kind === 'retry') retryableFailed.push(id);
     }
+    if (retryableFailed.length > 0)
+      log.info(`Resume: re-attempting ${retryableFailed.length} transiently-failed task(s)`);
+  }
 
-    const allLayerTasks = layer.taskIds.map((id) => taskMap.get(id)).filter((t): t is DAGTask => t !== undefined);
-    const tasks = allLayerTasks.filter((t) => state.tasks[t.id]?.status !== 'completed');
+  // Crashed in-flight branches carry unmerged commits; createWorktreeSafe refuses
+  // to clobber those unless force-reset. Discard them so the task re-runs clean.
+  const forceResetIds = [
+    ...new Set([
+      ...(config.forceWorktreeResetTaskIds ?? []),
+      ...inFlightToReset,
+      ...(rerunTaskIds ?? []),
+      ...retryableFailed,
+    ]),
+  ];
 
-    if (tasks.length === 0) {
-      // Both arms settle a no-work layer with a single layer.completed (no
-      // layer.started) so the reducer advances currentLayer past it; they share
-      // the emit/save/continue tail below. The merge-conflict path early-returns.
-      const pendingMerge = pendingMergeTaskIds(layer.taskIds, state);
+  const completed = new Set<string>(
+    Object.entries(state.tasks)
+      .filter(([, t]) => t.status === 'completed')
+      .map(([id]) => id),
+  );
 
-      if (pendingMerge.length > 0) {
-        // Resume gap: a prior run completed these tasks but paused before their
-        // worktrees were merged (interrupted, killed, or a false base-moved abort).
-        // The branches persist on disk — merge them now instead of skipping the
-        // layer, which would leave the base tree (and downstream layers' verify)
-        // missing their changes. A base that diverged since the prior run surfaces
-        // as a merge conflict below.
-        log.warn(`Layer ${layer.layer}: ${pendingMerge.length} task(s) completed but never merged — merging on resume`);
-        // onMerged must persist per task — see mergeLayerWorktrees doc (resume idempotency).
-        const resumeMerge = await mergeLayerWorktrees(pendingMerge, (taskId) => {
-          log.success(`Merged ${taskId}`);
-          emitWorktreeMerged({ taskId, state, baseBranch, dagId, ts: new Date().toISOString(), emit });
-        });
-        if (!resumeMerge.success) {
-          log.error(`Merge conflict in ${resumeMerge.failedAt}: ${resumeMerge.conflict}`);
-          return pauseDag(`Merge conflict in ${resumeMerge.failedAt}: ${resumeMerge.conflict}`, layer.layer);
-        }
-        // Re-merging on resume advanced HEAD; re-record the base so later
-        // layers' base-moved guard compares against our own merge commits,
-        // not the pre-merge sha. External movement is still detected.
-        const { stdout: postResumeMergeHead } = await exec('git', ['rev-parse', 'HEAD']);
-        baseCommitSha = postResumeMergeHead.trim();
-      } else {
-        log.info(`Layer ${layer.layer}: all tasks already completed, skipping`);
-      }
+  const layerRemaining = new Map<number, number>();
+  const layerFailedIds = new Map<number, string[]>();
+  for (const lyr of dag.executionLayers) {
+    layerRemaining.set(lyr.layer, lyr.taskIds.filter((id) => !completed.has(id)).length);
+    layerFailedIds.set(lyr.layer, []);
+  }
+  const layerStartedAt = new Map<number, number>();
+  const layerTaskIds = (layer: number): string[] => layerById.get(layer)?.taskIds ?? [];
+  const earliestIncompleteLayer = (): number => {
+    let earliest = Infinity;
+    for (const [layer, remaining] of layerRemaining) if (remaining > 0 && layer < earliest) earliest = layer;
+    return Number.isFinite(earliest) ? earliest : state.currentLayer;
+  };
 
-      // Re-run Tier-2 here too: a prior Tier-2 pause replays as all-tasks-completed
-      // and lands in this no-work branch, so the gate must fire again or a resume
-      // would advance over still-broken merged main. Skips cleanly when nothing
-      // changed or verification is off.
-      const pausedOnResume = await runLayerTier2(layer, Date.now());
-      if (pausedOnResume) return pausedOnResume;
-
+  const lane = createWriterLane();
+  const landDeps: LandWorktreeDeps = {
+    verifyBaseUnchanged: deps.verifyBaseUnchanged,
+    mergeWorktrees: deps.mergeWorktrees,
+    currentHeadSha: getHeadSha,
+  };
+  const landAndRoute = async (taskId: string, layer: number): Promise<ExecutionState | null> => {
+    const baseShaBefore = baseCommitSha;
+    let land;
+    try {
+      land = await lane.enqueue(() =>
+        landWorktree({ taskId, baseBranch, baseCommitSha, onMerged: () => {}, deps: landDeps }),
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log.error(`Landing ${taskId} threw an unexpected error: ${reason}`);
+      return pauseDag('unexpected-error', `Unexpected error landing ${taskId}: ${reason}`, layer);
+    }
+    if (land.status === 'base-moved') {
+      const head = await getHeadSha();
       emit({
-        kind: 'layer.completed',
+        kind: 'dag.base-moved',
+        schemaVersion: DAG_EVENT_SCHEMA_VERSION,
+        ts: new Date().toISOString(),
+        dagPath: config.dagPath,
+        dagId,
+        previousCommit: baseCommitSha,
+        newCommit: head,
+        branch: baseBranch,
+      });
+      log.error(
+        `Base branch "${baseBranch}" moved during execution (was ${baseCommitSha.slice(0, 8)}, now ${head.slice(0, 8)}). Merge aborted.`,
+      );
+      return pauseDag(
+        'base-moved',
+        `Base branch "${baseBranch}" moved from ${baseCommitSha.slice(0, 8)} to ${head.slice(0, 8)} -- aborting merge`,
+        layer,
+      );
+    }
+    if (land.status === 'conflict') {
+      log.error(`Merge conflict in ${taskId}: ${land.conflict}`);
+      return pauseDag('merge-conflict', `Merge conflict in ${taskId}: ${land.conflict}`, layer);
+    }
+    baseCommitSha = land.newSha ?? baseCommitSha;
+    emitWorktreeMerged({
+      taskId,
+      state,
+      baseBranch,
+      dagId,
+      ts: new Date().toISOString(),
+      emit,
+      baseShaBefore,
+      baseShaAfter: land.newSha ?? baseCommitSha,
+    });
+    return null;
+  };
+
+  const worktreeMap = new Map<string, { path: string; branch: string }>();
+  const retryAttempts = new Map<string, number>();
+
+  const ready: string[] = [...readySeed, ...retryableFailed];
+  const inFlight = new Map<string, Promise<Settled>>();
+  const permanentFailed = new Set<string>();
+  let quotaPause: { reason: string; quota: QuotaLimitMetadata; layer: number } | null = null;
+  let paused: ExecutionState | null = null;
+
+  const runOneTask = async (task: DAGTask): Promise<Settled> => {
+    const taskId = task.id;
+    const layerNum = taskLayer.get(taskId) ?? 0;
+    try {
+      return await runOneTaskInner(task, taskId, layerNum);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log.error(`Task ${taskId} threw an unexpected error: ${reason}`);
+      return { taskId, outcome: 'error', error: reason };
+    }
+  };
+
+  const runOneTaskInner = async (task: DAGTask, taskId: string, layerNum: number): Promise<Settled> => {
+    let wt = worktreeMap.get(taskId);
+    if (!wt) {
+      wt = await deps.createWorktree(taskId, baseBranch, { forceResetIds });
+      worktreeMap.set(taskId, wt);
+      emit({
+        kind: 'worktree.created',
         schemaVersion: DAG_EVENT_SCHEMA_VERSION,
         ts: new Date().toISOString(),
         dagId,
-        layer: layer.layer,
-        taskIds: layer.taskIds,
-        durationMs: 0,
+        taskId,
+        worktreePath: wt.path,
+        branch: wt.branch,
+        baseBranch,
       });
+    }
+
+    for (;;) {
+      emitTaskStarted({
+        task,
+        ts: new Date().toISOString(),
+        dagId,
+        layer: layerNum,
+        emit,
+        worktreePath: wt.path,
+        worktreeBranch: wt.branch,
+      });
+
+      const { usage, trace, failed } = await deps.runTask({
+        task,
+        config,
+        state,
+        log,
+        cwd: wt.path,
+        emit,
+        dagId,
+        layerNum,
+        verifyCommands,
+        signal,
+        projectMemory,
+        projectContext: dag.meta.projectContext,
+      });
+
+      if (!failed) {
+        const filesModified = await deps.getFilesModified(wt.path, baseBranch);
+        const ts = new Date().toISOString();
+        const durationMs = durationSinceStart(state.tasks[taskId]?.startedAt, ts);
+        const settle = await deps.settleNoOp({
+          task,
+          cwd: wt.path,
+          declaredOutputs: resolveOutputFiles(task),
+          trace,
+          usage,
+          state,
+          ts,
+          durationMs,
+          dagId,
+          layer: layerNum,
+          emit,
+          log,
+        });
+        if (settle.ok) {
+          emitTaskCompleted({ task, state, ts, durationMs, dagId, layer: layerNum, usage, filesModified, emit });
+          if (usage) log.taskUsage(taskId, usage);
+          log.success(`Task ${taskId} completed (${filesModified.length} files modified)`);
+          return { taskId, outcome: 'completed', filesModified, usage };
+        }
+      }
+
+      const decision = decide(readEvents(eventLogPath), taskId);
+      if (decision.kind === 'retry') {
+        const attempt = (retryAttempts.get(taskId) ?? 0) + 1;
+        retryAttempts.set(taskId, attempt);
+        emitTaskRetry({
+          task,
+          ts: new Date().toISOString(),
+          dagId,
+          layer: layerNum,
+          emit,
+          attempt,
+          delayMs: decision.delayMs,
+          reason: state.tasks[taskId]?.error ?? 'unknown',
+          previousError: state.tasks[taskId]?.error,
+        });
+        log.warn(`Task ${taskId} will retry (attempt ${attempt}) after ${decision.delayMs}ms`);
+        if (decision.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, decision.delayMs));
+        continue;
+      }
+      if (decision.kind === 'quota') {
+        const reason = `Quota limit reached while running ${taskId}: ${decision.reason}`;
+        log.warn(reason);
+        return { taskId, outcome: 'quota', reason, quota: decision.quota };
+      }
+      if (decision.kind === 'permanent') {
+        log.error(`Task ${taskId} permanently failed (${decision.reason})`);
+        return { taskId, outcome: 'permanent', reason: decision.reason };
+      }
+      const ts = new Date().toISOString();
+      const durationMs = durationSinceStart(state.tasks[taskId]?.startedAt, ts);
+      const filesModified = await deps.getFilesModified(wt.path, baseBranch);
+      emitTaskCompleted({ task, state, ts, durationMs, dagId, layer: layerNum, usage, filesModified, emit });
+      if (usage) log.taskUsage(taskId, usage);
+      return { taskId, outcome: 'completed', filesModified, usage };
+    }
+  };
+
+  const dispatch = (): void => {
+    if (quotaPause) return;
+    while (inFlight.size < MAX_GLOBAL_SLOTS && ready.length > 0) {
+      const taskId = ready.shift();
+      if (taskId === undefined) break;
+      if (completed.has(taskId) || inFlight.has(taskId)) continue;
+      const task = taskMap.get(taskId);
+      if (!task) continue;
+      const layerNum = taskLayer.get(taskId) ?? 0;
+      if (!layerStartedAt.has(layerNum)) {
+        const persistedStart = state.layers[String(layerNum)]?.startedAt;
+        if (persistedStart) {
+          layerStartedAt.set(layerNum, Date.parse(persistedStart));
+        } else {
+          layerStartedAt.set(layerNum, Date.now());
+          emit({
+            kind: 'layer.started',
+            schemaVersion: DAG_EVENT_SCHEMA_VERSION,
+            ts: new Date().toISOString(),
+            dagId,
+            layer: layerNum,
+            taskIds: layerTaskIds(layerNum),
+          });
+        }
+      }
+      inFlight.set(taskId, runOneTask(task));
+    }
+  };
+
+  const emitLayerDone = async (layer: number, startMs: number): Promise<ExecutionState | null> => {
+    const layerObj = layerById.get(layer);
+    if (!layerObj) return null;
+    const failed = layerFailedIds.get(layer) ?? [];
+    if (failed.length > 0) {
+      emit({
+        kind: 'layer.failed',
+        schemaVersion: DAG_EVENT_SCHEMA_VERSION,
+        ts: new Date().toISOString(),
+        dagId,
+        layer,
+        taskIds: layerObj.taskIds,
+        failedTaskIds: failed,
+        reason: `${failed.length} task(s) failed permanently: ${failed.join(', ')}`,
+      });
+      return null;
+    }
+    const tier2Pause = await runLayerTier2(layerObj, startMs);
+    if (tier2Pause) return tier2Pause;
+    emit({
+      kind: 'layer.completed',
+      schemaVersion: DAG_EVENT_SCHEMA_VERSION,
+      ts: new Date().toISOString(),
+      dagId,
+      layer,
+      taskIds: layerObj.taskIds,
+      durationMs: Math.max(0, Date.now() - startMs),
+    });
+    const layerUsages = layerObj.taskIds
+      .map((taskId) => ({ taskId, usage: state.tasks[taskId]?.usage }))
+      .filter((entry): entry is { taskId: string; usage: TaskUsage } => entry.usage !== undefined);
+    if (layerUsages.length > 0) log.layerCostSummary(layer, layerUsages);
+    return null;
+  };
+
+  const checkpointIfLayerDone = async (layer: number): Promise<boolean> => {
+    const remaining = (layerRemaining.get(layer) ?? 0) - 1;
+    layerRemaining.set(layer, remaining);
+    if (remaining > 0) return false;
+    const pause = await emitLayerDone(layer, layerStartedAt.get(layer) ?? Date.now());
+    if (pause) {
+      paused = pause;
+      return true;
+    }
+    return false;
+  };
+
+  const contractVerifier = createConsumerInputVerifier(taskMap);
+  const verifyConsumerContracts = (consumerIds: Iterable<string>): ExecutionState | null => {
+    for (const childId of consumerIds) {
+      const verification = contractVerifier(childId);
+      if (verification.passed) continue;
+      log.error('Contract verification reported issues:');
+      for (const broken of verification.brokenContracts) {
+        log.error(`  ${broken.taskId}: missing ${broken.outputName} (${broken.reason})`);
+        emit({
+          kind: 'contract.broken',
+          schemaVersion: DAG_EVENT_SCHEMA_VERSION,
+          ts: new Date().toISOString(),
+          dagId,
+          taskId: broken.taskId,
+          inputName: broken.inputName,
+          expectedFrom: broken.expectedFrom,
+          outputName: broken.outputName,
+          outputType: broken.outputType,
+          reason: broken.reason,
+        });
+      }
+      return pauseDag('contract-broken', 'Contract verification failed', taskLayer.get(childId) ?? 0);
+    }
+    return null;
+  };
+
+  for (const taskId of pendingMergeTaskIds(
+    dag.tasks.map((t) => t.id),
+    state,
+  )) {
+    log.warn(`Task ${taskId} completed but never merged -- merging on resume`);
+    const pause = await landAndRoute(taskId, taskLayer.get(taskId) ?? 0);
+    if (pause) return pause;
+  }
+
+  if (resume) {
+    for (const lyr of dag.executionLayers) {
+      if (state.layers[String(lyr.layer)]?.completedAt) continue;
+      if (!lyr.taskIds.every((id) => completed.has(id))) continue;
+      const lowerIncomplete = dag.executionLayers.some(
+        (l) => l.layer < lyr.layer && !l.taskIds.every((id) => completed.has(id)),
+      );
+      if (lowerIncomplete) continue;
+      const persisted = state.layers[String(lyr.layer)]?.startedAt;
+      const pause = await emitLayerDone(lyr.layer, persisted ? Date.parse(persisted) : Date.now());
+      if (pause) return pause;
+    }
+  }
+
+  if (resume && ready.length > 0) {
+    const seedPause = verifyConsumerContracts(ready);
+    if (seedPause) return seedPause;
+  }
+
+  while (!paused) {
+    if (signal?.aborted) {
+      paused = pauseDag('signal', 'signal aborted', earliestIncompleteLayer());
+      break;
+    }
+    dispatch();
+    if (inFlight.size === 0) {
+      if (quotaPause) paused = pauseDag('quota', quotaPause.reason, quotaPause.layer, quotaPause.quota);
+      break;
+    }
+
+    const settled = await Promise.race([...inFlight.values()]);
+    inFlight.delete(settled.taskId);
+    const layer = taskLayer.get(settled.taskId) ?? 0;
+
+    if (settled.outcome === 'error') {
+      paused = pauseDag(
+        'unexpected-error',
+        `Task ${settled.taskId} failed with an unexpected error: ${settled.error}`,
+        layer,
+      );
+      break;
+    }
+
+    if (settled.outcome === 'quota') {
+      quotaPause = { reason: settled.reason, quota: settled.quota, layer };
+      if (inFlight.size === 0) paused = pauseDag('quota', settled.reason, layer, settled.quota);
       saveState(statePath, state);
       continue;
     }
 
-    log.info(`Starting Layer ${layer.layer}: ${layer.description}`);
-    layerStartMs = Date.now();
-    emit({
-      kind: 'layer.started',
-      schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-      ts: new Date().toISOString(),
-      dagId,
-      layer: layer.layer,
-      taskIds: layer.taskIds,
-    });
-
-    for (const task of tasks) {
-      for (const depId of task.dependencies) {
-        if (state.tasks[depId]?.status !== 'completed') {
-          throw new Error(`Dependency ${depId} not completed for task ${task.id}`);
-        }
-      }
-    }
-
-    // Split tasks by weight
-    const trivialTasks = tasks.filter((t) => t.weight === 'trivial');
-    const nonTrivialTasks = tasks.filter((t) => t.weight !== 'trivial');
-
-    // v2 partial-layer state (set inside non-trivial block, read at layer.completed)
-    let layerCompletedWithFailures = false;
-    let layerPermanentFailedTaskIds: string[] = [];
-
-    // --- Run trivial tasks first on main branch ---
-    if (trivialTasks.length > 0) {
-      const batchResult = await executeTrivialBatch({
-        tasks: trivialTasks,
-        config,
-        state,
-        log,
-        baseCommitSha,
-        emit,
-        dagId,
-        layerNum: layer.layer,
-        signal,
-        verifyCommands,
-        projectMemory,
-      });
-      if (!batchResult.success) {
-        log.error(`Layer ${layer.layer} trivial batch failed. State saved. Resume with --resume.`);
-        return pauseDag(`Layer ${layer.layer} trivial batch failed`, layer.layer);
-      }
-      // The batch committed on the base branch, advancing HEAD. Re-record the
-      // base so the post-merge base-moved guard (and later layers' guards) don't
-      // trip on the executor's own commit. External movement between here and the
-      // merge is still detected against this updated sha.
-      const { stdout: postTrivialHead } = await exec('git', ['rev-parse', 'HEAD']);
-      baseCommitSha = postTrivialHead.trim();
+    if (settled.outcome === 'permanent') {
+      permanentFailed.add(settled.taskId);
+      layerFailedIds.get(layer)?.push(settled.taskId);
+      if (await checkpointIfLayerDone(layer)) break;
       saveState(statePath, state);
+      continue;
     }
 
-    // --- Run non-trivial tasks ---
-    if (nonTrivialTasks.length > 0) {
-      // Always route through a worktree: running on cwd triggers a silent no-op in the SDK
-      // session — agent reports completion without calling Write, leaving the tree clean.
-      const worktrees = await Promise.all(
-        nonTrivialTasks.map(async (task) => {
-          const wt = await createWorktreeSafe(task.id, baseBranch, {
-            forceResetIds: config.forceWorktreeResetTaskIds,
-          });
-          const ts = new Date().toISOString();
-          emit({
-            kind: 'worktree.created',
-            schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-            ts,
-            dagId,
-            taskId: task.id,
-            worktreePath: wt.path,
-            branch: wt.branch,
-            baseBranch,
-          });
-          emitTaskStarted({
-            task,
-            ts,
-            dagId,
-            layer: layer.layer,
-            emit,
-            worktreePath: wt.path,
-            worktreeBranch: wt.branch,
-          });
-          return { task, ...wt };
-        }),
-      );
-      saveState(statePath, state);
-
-      // --- Partial-layer continuation with retry loop ---
-      const worktreeMap = new Map(worktrees.map((wt) => [wt.task.id, wt]));
-      const succeededTaskIds = new Set<string>();
-      const permanentFailedIds = new Set<string>();
-      const retryAttempts = new Map<string, number>();
-      let quotaPauseReason: string | undefined;
-      let quotaPause: QuotaLimitMetadata | undefined;
-      let activeTasks = [...nonTrivialTasks];
-      let completedInLayer = 0;
-      const layerTotal = nonTrivialTasks.length;
-
-      log.info(`Spawning ${layerTotal} parallel session(s)...`);
-
-      while (activeTasks.length > 0) {
-        const activeResults = await Promise.allSettled(
-          activeTasks.map(async (task) => {
-            const { path: worktreePath } = worktreeMap.get(task.id)!;
-            const taskLog = log.child(`Layer ${layer.layer}`).child(task.id);
-            taskLog.info(`Spawning session in ${worktreePath}`);
-
-            const { usage, trace, failed } = await executeTaskPasses({
-              task,
-              config,
-              state,
-              log,
-              cwd: worktreePath,
-              emit,
-              dagId,
-              layerNum: layer.layer,
-              verifyCommands,
-              signal,
-              projectMemory,
-            });
-            if (failed) throw new Error(state.tasks[task.id]?.error ?? 'Pass execution failed');
-
-            if (usage) {
-              log.taskUsage(task.id, usage);
-            }
-            return { taskId: task.id, usage, trace };
-          }),
-        );
-
-        const filesModifiedPerTask = await Promise.all(
-          activeResults.map((r, i) =>
-            r.status === 'fulfilled'
-              ? getFilesModified(worktreeMap.get(activeTasks[i].id)!.path, baseBranch)
-              : Promise.resolve([]),
-          ),
-        );
-
-        const nextRetryTasks: Array<{ task: DAGTask; delayMs: number }> = [];
-
-        for (const [i, result] of activeResults.entries()) {
-          const task = activeTasks[i];
-          const taskId = task.id;
-
-          if (result.status === 'fulfilled') {
-            const filesModifiedForTask = filesModifiedPerTask[i];
-            const fileOutputPaths = resolveOutputFiles(task);
-            const ts = new Date().toISOString();
-            const durationMs = durationSinceStart(state.tasks[taskId]?.startedAt, ts);
-
-            const settle = await settleNoOpGate({
-              task,
-              cwd: worktreeMap.get(taskId)!.path,
-              declaredOutputs: fileOutputPaths,
-              trace: result.value.trace,
-              usage: result.value.usage,
-              state,
-              ts,
-              durationMs,
-              dagId,
-              layer: layer.layer,
-              emit,
-              log,
-            });
-
-            if (settle.ok) {
-              // Genuine success
-              completedInLayer += 1;
-              log.progress(completedInLayer, layerTotal, `Layer ${layer.layer} — ${taskId} done`);
-              log.success(`Task ${taskId} completed (${filesModifiedForTask.length} files modified)`);
-
-              emitTaskCompleted({
-                task,
-                state,
-                ts,
-                durationMs,
-                dagId,
-                layer: layer.layer,
-                usage: result.value.usage,
-                filesModified: filesModifiedForTask,
-                emit,
-              });
-              succeededTaskIds.add(taskId);
-              continue;
-            }
-
-            // Silent no-op: settleNoOpGate already emitted task.failed.
-            // Fall through to decide().
-          }
-
-          // Task failed (rejected promise or no-op) — consult retry policy
-          const events = readEvents(eventLogPath);
-          const decision = decide(events, taskId);
-
-          if (decision.kind === 'retry') {
-            const attempt = (retryAttempts.get(taskId) ?? 0) + 1;
-            retryAttempts.set(taskId, attempt);
-            emitTaskRetry({
-              task,
-              ts: new Date().toISOString(),
-              dagId,
-              layer: layer.layer,
-              emit,
-              attempt,
-              delayMs: decision.delayMs,
-              reason: state.tasks[taskId]?.error ?? 'unknown',
-              previousError: state.tasks[taskId]?.error,
-            });
-            nextRetryTasks.push({ task, delayMs: decision.delayMs });
-            log.warn(`Task ${taskId} will retry (attempt ${attempt}) after ${decision.delayMs}ms`);
-          } else if (decision.kind === 'quota') {
-            quotaPauseReason = `Quota limit reached while running ${taskId}: ${decision.reason}`;
-            quotaPause = decision.quota;
-            permanentFailedIds.add(taskId);
-            log.warn(quotaPauseReason);
-          } else if (decision.kind === 'permanent') {
-            permanentFailedIds.add(taskId);
-            log.error(`Task ${taskId} permanently failed (${decision.reason})`);
-          } else {
-            // 'succeeded' — no terminal failure event found; treat as success
-            succeededTaskIds.add(taskId);
-          }
-        }
-
-        if (nextRetryTasks.length > 0) {
-          const maxDelayMs = Math.max(...nextRetryTasks.map((x) => x.delayMs));
-          await new Promise<void>((resolve) => setTimeout(resolve, maxDelayMs));
-
-          // Emit task.started for each retry task (reuse existing worktree)
-          for (const { task } of nextRetryTasks) {
-            const wt = worktreeMap.get(task.id)!;
-            emitTaskStarted({
-              task,
-              ts: new Date().toISOString(),
-              dagId,
-              layer: layer.layer,
-              emit,
-              worktreePath: wt.path,
-              worktreeBranch: wt.branch,
-            });
-          }
-          activeTasks = nextRetryTasks.map((x) => x.task);
-        } else {
-          activeTasks = [];
-        }
-      }
-
-      saveState(statePath, state);
-
-      const hasAnyPermanentFailure = permanentFailedIds.size > 0;
-      const hasAnySuccess = succeededTaskIds.size > 0;
-
-      if (quotaPauseReason && !hasAnySuccess) {
-        log.warn(`${quotaPauseReason}. State saved. Resume with --resume after the limit resets.`);
-        return pauseDag(quotaPauseReason, layer.layer, quotaPause);
-      }
-
-      if (hasAnyPermanentFailure && !hasAnySuccess) {
-        // All tasks permanently failed — emit layer.failed and pause
-        emit({
-          kind: 'layer.failed',
-          schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-          ts: new Date().toISOString(),
-          dagId,
-          layer: layer.layer,
-          taskIds: layer.taskIds,
-          failedTaskIds: [...permanentFailedIds],
-          reason: 'All tasks in layer failed permanently',
-        });
-        log.error(`Layer ${layer.layer} all tasks permanently failed. State saved. Resume with --resume.`);
-        return pauseDag(`Layer ${layer.layer} failed — all tasks failed permanently`, layer.layer);
-      }
-
-      if (hasAnyPermanentFailure) {
-        // Some succeeded, some permanently failed — flag for layer.completed-with-failures
-        layerCompletedWithFailures = true;
-        layerPermanentFailedTaskIds = [...permanentFailedIds];
-      }
-
-      // Verify base branch hasn't moved before merging
-      const baseUnchanged = await verifyBaseUnchanged(baseBranch, baseCommitSha);
-      if (!baseUnchanged) {
-        const { stdout: currentHeadRaw } = await exec('git', ['rev-parse', 'HEAD']);
-        const currentHead = currentHeadRaw.trim();
-        emit({
-          kind: 'dag.base-moved',
-          schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-          ts: new Date().toISOString(),
-          dagPath: config.dagPath,
-          dagId,
-          previousCommit: baseCommitSha,
-          newCommit: currentHead,
-          branch: baseBranch,
-        });
-        log.error(
-          `Base branch "${baseBranch}" moved during execution ` +
-            `(was ${baseCommitSha.slice(0, 8)}, now ${currentHead.slice(0, 8)}). ` +
-            `Merge aborted. Resolve the conflict and resume with --resume.`,
-        );
-        return pauseDag(
-          `Base branch "${baseBranch}" moved from ${baseCommitSha.slice(0, 8)} to ${currentHead.slice(0, 8)} — aborting merge`,
-          layer.layer,
-        );
-      }
-
-      // Merge only succeeded tasks' worktrees
-      const succeededWorktrees = worktrees.filter((wt) => succeededTaskIds.has(wt.task.id));
-      if (succeededWorktrees.length > 0) {
-        log.info(
-          `Merging Layer ${layer.layer} worktrees (${succeededWorktrees.length} of ${nonTrivialTasks.length})...`,
-        );
-        // onMerged must persist per task — see mergeLayerWorktrees doc (resume idempotency).
-        const mergeResult = await mergeLayerWorktrees(
-          succeededWorktrees.map((wt) => wt.task.id),
-          (taskId) => {
-            log.success(`Merged ${taskId}`);
-            emitWorktreeMerged({ taskId, state, baseBranch, dagId, ts: new Date().toISOString(), emit });
-          },
-        );
-
-        if (!mergeResult.success) {
-          log.error(`Merge conflict in ${mergeResult.failedAt}: ${mergeResult.conflict}`);
-          return pauseDag(`Merge conflict in ${mergeResult.failedAt}: ${mergeResult.conflict}`, layer.layer);
-        }
-
-        // Worktree merges advanced HEAD; re-record the base so the next
-        // layer's base-moved guard compares against our own merge commits,
-        // not the pre-merge sha. External movement is still detected.
-        const { stdout: postMergeHead } = await exec('git', ['rev-parse', 'HEAD']);
-        baseCommitSha = postMergeHead.trim();
-      }
-
-      if (quotaPauseReason) {
-        log.warn(`${quotaPauseReason}. Merged completed work; resume with --resume after the limit resets.`);
-        return pauseDag(quotaPauseReason, layer.layer, quotaPause);
-      }
+    const landPause = await landAndRoute(settled.taskId, layer);
+    if (landPause) {
+      paused = landPause;
+      break;
     }
+    completed.add(settled.taskId);
 
-    // Layer cost summary
-    const layerUsages = tasks
-      .map((t) => ({ taskId: t.id, usage: state.tasks[t.id]?.usage }))
-      .filter((e): e is { taskId: string; usage: TaskUsage } => e.usage !== null && e.usage !== undefined);
-    if (layerUsages.length > 0) {
-      log.layerCostSummary(layer.layer, layerUsages);
+    const newlyReady = markCompleted(unmetDeps, children, settled.taskId);
+    const contractPause = verifyConsumerContracts(newlyReady);
+    if (contractPause) {
+      paused = contractPause;
+      break;
     }
+    for (const id of newlyReady) ready.push(id);
 
-    // --- Tier-2: merged-whole verification on main (replaces runPostExecution) ---
-    // Runs for EVERY layer including the last (outside the contract guard below,
-    // which skips the last layer). cwd = main checkout, which HAS node_modules, so
-    // the JS checks Tier-1 skipped in deps-less worktrees actually run here. On
-    // failure: record layer.verification-failed and PAUSE (no auto-fix).
-    const paused = await runLayerTier2(layer, layerStartMs);
-    if (paused) return paused;
-
-    // Contract verification between layers (skip for last layer)
-    if (layer.layer !== lastLayerNum) {
-      const completedTaskIds = Object.entries(state.tasks)
-        .filter(([, t]) => t.status === 'completed')
-        .map(([id]) => id);
-      const nextLayer = dag.executionLayers.find((l) => l.layer === layer.layer + 1);
-      if (nextLayer) {
-        const verification = await verifyLayerContracts(completedTaskIds, nextLayer.taskIds, dag);
-        if (!verification.passed) {
-          log.error('Contract verification reported issues:');
-          for (const broken of verification.brokenContracts) {
-            log.error(`  ${broken.taskId}: missing ${broken.outputName} (${broken.reason})`);
-            emit({
-              kind: 'contract.broken',
-              schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-              ts: new Date().toISOString(),
-              dagId,
-              taskId: broken.taskId,
-              inputName: broken.inputName,
-              expectedFrom: broken.expectedFrom,
-              outputName: broken.outputName,
-              outputType: broken.outputType,
-              reason: broken.reason,
-            });
-          }
-          log.error(
-            `Layer ${layer.layer} produced incomplete outputs. State saved. Resume with --resume after fixing.`,
-          );
-          return pauseDag('Contract verification failed', layer.layer);
-        }
-      }
-    }
-
-    if (layerCompletedWithFailures) {
-      emit({
-        kind: 'layer.completed-with-failures',
-        schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-        ts: new Date().toISOString(),
-        dagId,
-        layer: layer.layer,
-        taskIds: layer.taskIds,
-        failedTaskIds: layerPermanentFailedTaskIds,
-        durationMs: Date.now() - layerStartMs,
-      });
-    } else {
-      emit({
-        kind: 'layer.completed',
-        schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-        ts: new Date().toISOString(),
-        dagId,
-        layer: layer.layer,
-        taskIds: layer.taskIds,
-        durationMs: Date.now() - layerStartMs,
-      });
-    }
+    if (await checkpointIfLayerDone(layer)) break;
     saveState(statePath, state);
-    const layerFiles = tasks.reduce((n, t) => n + (state.tasks[t.id]?.filesModified?.length ?? 0), 0);
-    log.success(`Layer ${layer.layer} complete — ${tasks.length} task(s), ${layerFiles} file(s) modified`);
+  }
+
+  if (paused) return paused;
+
+  if (completed.size < dag.tasks.length) {
+    const blocked = dag.tasks.length - completed.size;
+    const someFailed = [...permanentFailed][0];
+    return pauseDag(
+      'all-tasks-failed',
+      `${permanentFailed.size} task(s) failed permanently; ${blocked} task(s) did not complete`,
+      someFailed ? (taskLayer.get(someFailed) ?? 0) : earliestIncompleteLayer(),
+    );
   }
 
   // Per-layer Tier-2 verification (above) replaced the old single post-execution

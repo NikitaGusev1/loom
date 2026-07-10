@@ -4,7 +4,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DAGTask, ExecutionState, ExecutorConfig, TaskUsage } from '../types.js';
+import type { DAGTask, ExecutionState, ExecutorConfig, ProjectContext, TaskUsage } from '../types.js';
 import type { DagEvent } from '../events/types.js';
 import type { Logger } from '../logger.js';
 import type { SessionTrace } from '../claude-cli.js';
@@ -37,6 +37,7 @@ interface ExecuteTaskPassesArgs {
   /** Top-level abort signal (from SIGINT handler). Passed through to runQuery for cooperative cancellation. */
   signal?: AbortSignal;
   projectMemory?: ProjectMemory | null;
+  projectContext?: ProjectContext;
 }
 
 export const isBacklogPauseAbort = (signal: AbortSignal | undefined): boolean =>
@@ -54,6 +55,7 @@ export const executeTaskPasses = async ({
   verifyCommands = {},
   signal,
   projectMemory,
+  projectContext,
 }: ExecuteTaskPassesArgs): Promise<{
   usage?: TaskUsage;
   trace?: SessionTrace;
@@ -72,7 +74,7 @@ export const executeTaskPasses = async ({
   });
 
   try {
-    const prompt = buildTaskPrompt(task, { projectMemory });
+    const prompt = buildTaskPrompt(task, { projectMemory, projectContext });
     const { usage, trace } = await runQuery(prompt, task.weight, config, {
       cwd,
       signal: deadline.signal,

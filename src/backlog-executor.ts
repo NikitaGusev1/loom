@@ -244,6 +244,7 @@ export const executeBacklog = async ({
       verifyCommands,
       signal: taskAttemptSignal,
       projectMemory,
+      projectContext: dag.meta.projectContext,
     });
     if (cancelled) return { kind: 'cancelled', task };
     if (failed) {

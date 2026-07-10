@@ -3,7 +3,7 @@
 // on main: the no-op retry runs in-batch (once, fresh session), and Tier-1
 // fixes are follow-up commits rather than discards.
 
-import type { DAGTask, ExecutionState, ExecutorConfig, TaskUsage } from '../types.js';
+import type { DAGTask, ExecutionState, ExecutorConfig, ProjectContext, TaskUsage } from '../types.js';
 import type { DagEvent } from '../events/types.js';
 import type { Logger } from '../logger.js';
 import type { SessionTrace } from '../claude-cli.js';
@@ -50,6 +50,7 @@ interface ExecuteTrivialBatchArgs {
   signal?: AbortSignal;
   verifyCommands?: ResolvedCommands;
   projectMemory?: ProjectMemory | null;
+  projectContext?: ProjectContext;
 }
 
 export const executeTrivialBatch = async ({
@@ -64,6 +65,7 @@ export const executeTrivialBatch = async ({
   signal,
   verifyCommands = {},
   projectMemory,
+  projectContext,
 }: ExecuteTrivialBatchArgs): Promise<{ success: boolean; filesModified: string[] }> => {
   if (tasks.length === 0) return { success: true, filesModified: [] };
 
@@ -86,7 +88,8 @@ export const executeTrivialBatch = async ({
   let anyPermanentNoOp = false;
 
   while (toRun.length > 0) {
-    const prompt = (attempt > 0 ? TRIVIAL_RETRY_NOTICE : '') + buildBatchedTrivialPrompt(toRun, { projectMemory });
+    const prompt =
+      (attempt > 0 ? TRIVIAL_RETRY_NOTICE : '') + buildBatchedTrivialPrompt(toRun, { projectMemory, projectContext });
 
     // The batch is a single SDK session so the deadline covers all tasks collectively.
     const deadline = createTaskDeadline({
@@ -246,7 +249,7 @@ export const executeTrivialBatch = async ({
           runVerification({ commands: verifyCommands, changedFiles: files, cwd, weight: 'trivial', signal, log }),
       },
       {
-        basePrompt: buildBatchedTrivialPrompt(tasks, { projectMemory }),
+        basePrompt: buildBatchedTrivialPrompt(tasks, { projectMemory, projectContext }),
         fixNotice: VERIFICATION_FIX_NOTICE,
         maxAttempts: VERIFICATION_MAX_FIX_ATTEMPTS,
       },

@@ -1,6 +1,6 @@
 # dag-executor
 
-CLI tool that drives multi-task LLM decompositions: loads a DAG JSON, executes layers in dependency order, runs Claude Agent SDK per task (in git worktrees for isolation), merges worktrees back, and verifies inter-layer contracts.
+CLI tool that drives multi-task LLM decompositions: loads a DAG JSON, starts tasks as soon as dependencies land, runs provider sessions per task in git worktrees, merges worktrees back through a serialized writer lane, and verifies contracts plus detected test/lint/typecheck gates.
 
 **Design spec**: `.claude/ai/spec-2026-05-19-dag-executor-v2-event-sourced.md` (in the [vmm](https://github.com/Visma-Manager/vmm) repo, where this tool originated)
 
@@ -37,7 +37,7 @@ After pulling changes: `npm run build` (the linked binary points at `build/index
 
 ### 2. Claude Code plugin
 
-Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/decompose`, `/implement-dag`, the review skills `/code-review` / `/triage-review`, the `plan-reviewer` / `code-reviewer` / `review-triager` / `task-decomposer` / `code-simplifier` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
+Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/cleanup`, `/decompose`, `/implement-dag`, the review skills `/code-review` / `/triage-review`, the `plan-reviewer` / `code-reviewer` / `review-triager` / `task-decomposer` / `code-simplifier` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
 
 `/auto-implement` defaults to the **supervised** flow (backgrounds the supervisor, one fresh context per phase, chat just monitors gates); pass `--inline` for the monolithic in-session engine — the only substrate that runs sequential (`/implement-plan`) plans.
 
@@ -153,9 +153,9 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 
 | Kind             | When emitted                                      | Payload fields                                                                                | Consumer                      |
 | ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------- |
-| `dag.started`    | Executor begins a fresh or resumed run            | `dagPath`, `dagId`, `branch`, `resume`                                                        | Reducer (sets run start time) |
+| `dag.started`    | Executor begins a fresh or resumed run            | `dagPath`, `dagId`, `branch`, `resume`, `baseStartSha?`                                       | Reducer (sets run start time) |
 | `dag.completed`  | All layers finished (success or partial)          | `dagPath`, `dagId`, `totalTasks`, `succeededTasks`, `failedTasks`, `durationMs`, `finalState` | Reducer, human                |
-| `dag.paused`     | Layer/backlog fails and executor stops (resumable) | `dagPath`, `dagId`, `reason`, `currentLayer`, `blockedTasks?`, `quota?`                        | Reducer, human                |
+| `dag.paused`     | Layer/backlog fails and executor stops (resumable) | `dagPath`, `dagId`, `reason`, `currentLayer`, `cause?`, `blockedTasks?`, `quota?`              | Reducer, human                |
 | `dag.aborted`    | SIGINT / SIGTERM received or fatal internal error | `dagPath`, `dagId`, `reason`, `signal`                                                        | Reducer, human                |
 | `dag.base-moved` | Base branch HEAD changed between layer runs       | `dagPath`, `dagId`, `previousCommit`, `newCommit`, `branch`                                   | Reducer (abort trigger)       |
 
@@ -190,7 +190,7 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 | Kind               | When emitted                                      | Payload fields                                                              | Consumer                          |
 | ------------------ | ------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------- |
 | `worktree.created` | `git worktree add` succeeded for a task           | `dagId`, `taskId`, `worktreePath`, `branch`, `baseBranch`                   | Reducer (records worktree active) |
-| `worktree.merged`  | Task branch merged back into base branch          | `dagId`, `taskId`, `worktreePath`, `branch`, `targetBranch`, `filesChanged` | Reducer, human (audit trail)      |
+| `worktree.merged`  | Task branch merged back into base branch          | `dagId`, `taskId`, `worktreePath`, `branch`, `targetBranch`, `filesChanged`, `baseShaBefore?`, `baseShaAfter?` | Reducer, human (audit trail)      |
 | `worktree.removed` | `git worktree remove` + `git branch -D` completed | `dagId`, `taskId`, `worktreePath`, `branch`, `reason`                       | Reducer (clears worktree record)  |
 
 `worktree.removed.reason` values:
@@ -205,6 +205,8 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 | ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------- |
 | `contract.verified` | An output contract from a prior task was found | `dagId`, `taskId`, `outputName`, `outputKind`                                        | Reducer                           |
 | `contract.broken`   | A required input from a prior task is missing  | `dagId`, `taskId`, `inputName`, `expectedFrom`, `outputName`, `outputType`, `reason` | Reducer (task → failed, no retry) |
+
+Input contracts are source-routed: each input's `source` must be a known direct dependency, and the input name is resolved only against that source task's like-named output. Same-named outputs from unrelated tasks do not satisfy the contract.
 
 ---
 
@@ -322,6 +324,11 @@ dag-executor <decomposition.json> [flags]
 | `--slots`                        | false                      | Print machine-wide slot snapshot and exit (no DAG argument needed)                               |
 | `--dag-readiness`                | false                      | Check decomposition quality and exit without executing                                           |
 | `--skip-dag-readiness`           | false                      | Bypass the default decomposition quality gate before execution                                   |
+| `--metrics <log...>`             | —                          | Summarize one or more `.events.jsonl` logs and exit                                              |
+| `--human`                        | false                      | Render `--metrics` output as a human-readable report                                             |
+| `--diff-view <dag>`              | —                          | Render a self-contained HTML diff view for a completed DAG run                                   |
+| `--no-open`                      | false                      | With `--diff-view`, write the HTML path without opening a browser                                |
+| `--provider=codex\|claude`       | codex                      | Choose provider backend                                                                          |
 | `--model=opus\|sonnet\|haiku`    | sonnet                     | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
 | `--rerun=id1,id2`                | —                          | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
 | `--force-worktree-reset=id1,id2` | —                          | Allow clobbering unmerged branches for the listed task IDs                                       |
@@ -331,6 +338,8 @@ dag-executor <decomposition.json> [flags]
 | `--no-verify`                    | false                      | Disable both verification tiers entirely                                                         |
 | `--memory=<path>`                | `.dag-executor/memory.md`  | Use a specific curated project memory file for task prompts                                      |
 | `--no-memory`                    | false                      | Disable curated project memory prompt injection                                                  |
+
+Completed and paused runs are archived best-effort to `~/.dag-executor/corpus` for later metrics/review. Override with `DAG_EXECUTOR_CORPUS_DIR=<dir>` or disable with `DAG_EXECUTOR_NO_CORPUS=1`.
 
 ### DAG readiness gate
 

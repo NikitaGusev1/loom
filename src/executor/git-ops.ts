@@ -11,6 +11,11 @@ export const getCurrentBranch = async (): Promise<string> => {
   return stdout.trim();
 };
 
+export const getHeadSha = async (): Promise<string> => {
+  const { stdout } = await exec('git', ['rev-parse', 'HEAD']);
+  return stdout.trim();
+};
+
 // Union of a git diff (against `diffSpec`) and untracked files, deduped. A git
 // failure degrades to "no changed files" rather than throwing.
 const gitChangedFiles = async (cwd: string, diffSpec: string): Promise<string[]> => {

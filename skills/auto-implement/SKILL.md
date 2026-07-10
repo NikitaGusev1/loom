@@ -1,6 +1,6 @@
 ---
 description: Orchestrate full plan → implement → review → PR flow
-argument-hint: <plan-path> [--dag] [--mode autonomous]
+argument-hint: <plan-path> [--dag] [--mode human]
 phase: orchestration
 disable-model-invocation: true
 ---
@@ -23,8 +23,9 @@ You are the entry point for the implementation pipeline. **By default you launch
 Parse from `$ARGUMENTS`:
 
 - **Plan path** (required): Path to an approved `.claude/ai/plan-*.md` file
-- **Mode** (optional): `human` (default) or `autonomous`
-  - `--mode autonomous` or `--autonomous` enables autonomous mode
+- **Mode** (optional): `autonomous` (default) or `human`
+  - Autonomous runs through the full flow, pausing only for hard stops, max-retry escalation, and plan-issue gates
+  - `--mode human` or `--human` opts into human mode
 - **Substrate** (optional): `--inline` forces the monolithic in-session engine (Phases 1–10 below). Default is the **supervised** flow (background supervisor, fresh context per phase) — see [Execution Substrate](#execution-substrate-decide-this-first-before-phase-1). Use `--inline` when you want one foreground context or are running a **sequential** plan (the supervisor is DAG-only).
 - **DAG mode** (optional): `--dag` forces the DAG executor for parallel implementation; `--no-dag` forces the sequential `/implement-plan` path. If neither is passed, mode is **auto-decided** by the Phase 2 thresholds based on the decomposition shape. (Mode = DAG-vs-sequential; substrate = supervised-vs-inline. A sequential mode always implies `--inline`.)
   - Requires a `decomposition_path` in the plan's YAML frontmatter pointing to a `.claude/ai/decomposition-*.json` file
@@ -59,13 +60,13 @@ In autonomous mode, the orchestrator logs each decision and its reasoning so the
 
 ## Dependency Availability (Hybrid plugin model — read first)
 
-This plugin ships the **execute + judge** half of the pipeline: the `plan-reviewer`, `code-reviewer`, and `review-triager` agents, the `/code-review` and `/triage-review` skills, the `task-decomposer` agent, and `/decompose` / `/implement-dag`. Some phases below reference agents/skills the plugin **does not** ship — they are either frontend-only or left to the consumer project. Each such phase is **availability-gated**: if the referenced agent/skill is not installed in the current project, **skip that phase and log the skip** (one line: `Phase N skipped — <agent/skill> not available in this project`), then continue. A missing optional dependency is never a hard error.
+This plugin ships the **execute + judge** half of the pipeline: the `plan-reviewer`, `code-reviewer`, and `review-triager` agents, the `/cleanup`, `/code-review`, and `/triage-review` skills, the `task-decomposer` agent, and `/decompose` / `/implement-dag`. Some phases below reference agents/skills the plugin **does not** ship — they are either frontend-only or left to the consumer project. Each such phase is **availability-gated**: if the referenced agent/skill is not installed in the current project, **skip that phase and log the skip** (one line: `Phase N skipped — <agent/skill> not available in this project`), then continue. A missing optional dependency is never a hard error.
 
 | Dependency | Used by | If absent |
 |---|---|---|
 | `/implement-plan` (+ fix mode) | Phase 3 sequential, Phase 9 | **Ships with this plugin** (`dag-executor:implement-plan`) — always available. The legacy consumer-supplied fallback below is retained only for projects that intentionally shadow it. |
 | `figma-differ` + figma-console MCP, `--verify-simulator` | Phase 4, simulator checks | Skip (frontend-only). Phase 4 writes its summary with the skip marker. |
-| `/cleanup` | Phase 5 | Skip + log. Best-effort lint/format is optional. |
+| `/cleanup` | Phase 5 | **Ships with this plugin** — always available. Missing repo toolchain commands are skipped inside the skill. |
 | `code-simplifier` | Phase 6 | Skip + log. (Ships as a separate marketplace plugin — usually present.) |
 | `/enhance-plan`, `/handoff`, `/create-pr` | Phases 8–10 escalation/terminal | If absent, surface the equivalent message inline (describe the plan issue / handoff / PR steps in the response) instead of dispatching the skill. |
 
@@ -247,8 +248,6 @@ This phase runs **post-merge**, after `/implement-plan` (or `--dag` execution) h
 **Mode behavior**: Identical in human and autonomous modes — the only pause point is the MCP-disconnected prompt in step 3. There is no verdict-shaped sub-flow; the diff is advisory and `code-reviewer` makes the final call.
 
 ### Phase 5: Cleanup
-
-> **Availability gate**: this plugin does not ship `/cleanup`. If `/cleanup` is not available in the project, skip this phase and log `Phase 5 skipped — /cleanup not available in this project`, then proceed to Phase 6. (A repo can run its own lint/typecheck manually — e.g. `npm run lintTypes` — but this phase does not require it.)
 
 Run `/cleanup` to fix TypeScript errors, ESLint violations, and formatting issues in files touched by the branch. This is a best-effort pass that reduces noise in the code review.
 

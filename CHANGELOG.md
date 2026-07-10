@@ -22,6 +22,23 @@ Under 0.x, a MINOR bump signals a breaking CLI-surface change.
 
 ---
 
+## [0.4.0] - 2026-07-10
+
+### Added
+
+- Main executor ready-work scheduling: tasks start as soon as dependencies land, then merge through a serialized writer lane while layers remain Tier-2 verification checkpoints.
+- Standalone `--metrics <log...> [--human]` and `--diff-view <dag> [--no-open]` CLI modes.
+- Best-effort run corpus archiving with `DAG_EXECUTOR_CORPUS_DIR` and `DAG_EXECUTOR_NO_CORPUS`.
+- Diff-friendly event fields: `dag.started.baseStartSha`, `worktree.merged.baseShaBefore/baseShaAfter`, and typed `dag.paused.cause`.
+- DAG `meta.projectContext` prompt support and `/cleanup` skill.
+
+### Changed
+
+- Input contracts are source-routed: `input.source` must be a known direct dependency and only that producer's like-named output can satisfy the input.
+- Preserved local Codex defaults, Claude provider support, backlog mode, quota pause metadata, DAG readiness gates, Loom supervisor binaries, and curated project memory.
+
+---
+
 ## [0.3.0] - 2026-06-09
 
 ### Added

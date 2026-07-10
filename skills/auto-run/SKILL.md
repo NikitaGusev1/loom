@@ -24,7 +24,7 @@ Thin launcher, monitor, and gate-router for the `/auto-implement` supervisor loo
 Parse `$ARGUMENTS` to extract:
 
 - **Plan path** (required): the first positional argument ending in `.md`
-- **Mode**: `human` if not specified; `autonomous` if `--mode autonomous` or `--autonomous` appears
+- **Mode**: `autonomous` if not specified; `human` only if `--mode human` or `--human` appears
 - **Judgment model** (default `claude-opus-4-8`): from `--models judgment=<value>`
 - **Mechanical model** (default `claude-sonnet-4-6`): from `--models mechanical=<value>`
 - **Slug**: from `--slug <value>` if present; otherwise derived from the plan filename by stripping the `plan-` prefix and `.md` suffix (e.g. `plan-2026-06-04-vmm-7218.md` → `2026-06-04-vmm-7218`)

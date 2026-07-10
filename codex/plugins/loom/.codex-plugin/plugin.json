@@ -1,7 +1,7 @@
 {
   "name": "loom",
-  "version": "0.1.0",
-  "description": "Codex-native Loom commands for simplifying and reviewing current code changes.",
+  "version": "0.1.0+codex.20260710185102",
+  "description": "Codex-native Loom and dag-executor skills for exploration, planning, decomposition, implementation, cleanup, review, and supervised runs.",
   "author": {
     "name": "Nikita Gusev",
     "email": "nikita.gusev@visma.com"
@@ -9,16 +9,31 @@
   "homepage": "https://github.com/NikitaGusev1/loom",
   "repository": "https://github.com/NikitaGusev1/loom",
   "license": "UNLICENSED",
-  "keywords": ["codex", "code-review", "simplification", "loom"],
+  "keywords": [
+    "codex",
+    "dag-executor",
+    "loom",
+    "planning",
+    "code-review",
+    "automation"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Loom",
-    "shortDescription": "Simplify and review current code changes in Codex",
-    "longDescription": "Loom provides Codex-native commands for two focused engineering workflows: behavior-preserving simplification of recently changed code and comprehensive pre-commit code review with a structured report.",
+    "shortDescription": "Use Loom and dag-executor workflows in Codex",
+    "longDescription": "Loom provides Codex-native skills for exploring feature ideas, writing specs and plans, decomposing work into DAGs, running supervised implementations, cleaning up changes, simplifying code, reviewing diffs, and triaging review findings.",
     "developerName": "Nikita Gusev",
     "category": "Developer Tools",
-    "capabilities": ["Read", "Write"],
-    "defaultPrompt": ["Simplify the current diff.", "Review my current changes.", "Run simplify, then code review."],
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Explore this feature idea and write a spec.",
+      "Create a plan from the latest spec.",
+      "Decompose this plan into a DAG.",
+      "Run cleanup, then code review."
+    ],
     "brandColor": "#2563EB",
     "screenshots": []
   }

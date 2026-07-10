@@ -118,7 +118,19 @@ Context Bundle:
 - layoutSpec: { Component Hierarchy and Spacing & Layout tables from Figma analysis }
 - conventions: { project conventions relevant to this task }
 - projectMemory: { relevant curated lessons from `.dag-executor/memory.md`, if present }
+- projectContext: { run-wide repo facts, derived once }
 ```
+
+**Derive `projectContext` once.** Capture repo-level facts that are identical across
+tasks in `meta.projectContext`, so executor prompts can inline them without every
+spawned session re-reading the same references:
+- `sharedComponents` — concise reusable UI component inventory and locations. Omit for non-UI work.
+- `conventions` — run-wide conventions from root docs and research. Task-specific pitfalls still belong in each task's `context.conventions`.
+- `figmaToolset` — only when the repo uses non-default Figma MCP tools.
+- `themeTokensDoc` — path to the full design-token reference, as a pointer rather than an inline token dump.
+
+Verify every path before emitting it. Do not duplicate run-wide facts into every
+task's `context.conventions` or `relatedPatterns`.
 
 **CRITICAL**: If the Figma research produced a Component Hierarchy (indented tree of
 containers with flex directions, alignment, and nesting) and/or a Spacing & Layout
@@ -180,6 +192,8 @@ For each task:
 - Verify contracts.inputs is non-empty (except for root tasks that
   take their input from the original requirement)
 - Verify contracts.outputs is non-empty
+- For each input contract, verify `input.source` is a known task and is listed in
+  the consumer task's `dependencies`
 - For each dependency edge (task B depends on task A):
   - Verify A.contracts.outputs contains something B.contracts.inputs references
 ```

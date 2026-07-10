@@ -613,7 +613,7 @@ git commit -m "feat: wire metrics diff view and corpus cli"
 - Create: `src/executor/deps.ts`
 - Modify: `src/executor.ts`
 
-- [ ] **Step 1: Port dependency interface**
+- [x] **Step 1: Port dependency interface**
 
 Adapt upstream `src/executor/deps.ts`, but include local functions/types as needed:
 
@@ -626,13 +626,13 @@ Adapt upstream `src/executor/deps.ts`, but include local functions/types as need
 
 If main ready-work no longer uses trivial batching, do not include it in the dependency seam.
 
-- [ ] **Step 2: Thread optional deps into `executeDAG`**
+- [x] **Step 2: Thread optional deps into `executeDAG`**
 
 Add optional dependency injection in `ExecuteOptions` only if needed, or use an internal default parameter matching upstream.
 
 Preserve public caller behavior from `src/index.ts`.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 
@@ -643,6 +643,8 @@ npm run build
 Expected: PASS, with no behavior change yet.
 
 - [ ] **Step 4: Commit**
+
+Blocked for now: the implementation and build verification are complete, but the escalated git commit was rejected by the current usage/approval limit. Commit when git approval is available again.
 
 ```bash
 git add src/executor/deps.ts src/executor.ts src/types.ts
@@ -662,7 +664,7 @@ git commit -m "refactor: add executor dependency seam"
 - Create/modify: `src/executor.ready.test.ts`
 - Modify: existing executor/worktree/state tests as needed
 
-- [ ] **Step 1: Study local executor-only features before editing**
+- [x] **Step 1: Study local executor-only features before editing**
 
 Read and note local behavior that must survive:
 
@@ -672,7 +674,7 @@ rg -n "provider|projectMemory|quota|pendingMerge|trivial|pauseDag|emitWorktreeMe
 
 Expected: implementation notes are clear before replacing the loop.
 
-- [ ] **Step 2: Replace strict layer dispatch with ready-work loop**
+- [x] **Step 2: Replace strict layer dispatch with ready-work loop**
 
 Adapt upstream `src/executor.ts` algorithm:
 
@@ -691,7 +693,7 @@ Preserve local:
 - DAG path/config fields
 - readiness preflight remains in `src/index.ts`
 
-- [ ] **Step 3: Add serialized land path**
+- [x] **Step 3: Add serialized land path**
 
 Use `createWriterLane` and `landWorktree`.
 
@@ -709,7 +711,7 @@ On failure:
 - conflict -> pause with cause `merge-conflict`
 - unexpected throw -> pause with cause `unexpected-error`
 
-- [ ] **Step 4: Add pause cause threading**
+- [x] **Step 4: Add pause cause threading**
 
 Change `pauseDag` in main executor to require `DagPauseCause`.
 
@@ -721,7 +723,7 @@ Local mappings:
 - all permanent failures/no runnable work -> `all-tasks-failed`
 - signal -> `signal`
 
-- [ ] **Step 5: Add per-edge contract checks**
+- [x] **Step 5: Add per-edge contract checks**
 
 When a producer lands:
 
@@ -733,7 +735,7 @@ On resume:
 
 - verify contracts for the ready seed before dispatch.
 
-- [ ] **Step 6: Add checkpoint behavior**
+- [x] **Step 6: Add checkpoint behavior**
 
 When every task in a layer has terminal status:
 
@@ -744,7 +746,7 @@ When every task in a layer has terminal status:
 
 Resume must re-run a missing Tier-2 checkpoint only after all lower layers are complete.
 
-- [ ] **Step 7: Handle retry/resume edge cases**
+- [x] **Step 7: Handle retry/resume edge cases**
 
 Implement upstream fixes:
 
@@ -759,7 +761,7 @@ Preserve local quota behavior:
 - already-completed work should be landed before pause where practical
 - pause carries quota metadata
 
-- [ ] **Step 8: Port ready-work executor tests**
+- [x] **Step 8: Port ready-work executor tests**
 
 Adapt upstream `src/executor.ready.test.ts`.
 
@@ -770,7 +772,7 @@ Add local coverage for:
 - `--backlog` dispatch remains in `src/index.ts`, not this executor
 - project memory is passed to task prompt execution path
 
-- [ ] **Step 9: Update existing tests**
+- [x] **Step 9: Update existing tests**
 
 Run:
 
@@ -791,7 +793,7 @@ node --test build/worktree.test.js
 
 Expected: PASS.
 
-- [ ] **Step 10: Full verification**
+- [x] **Step 10: Full verification**
 
 Run:
 
@@ -802,6 +804,8 @@ npm run test
 Expected: PASS.
 
 - [ ] **Step 11: Commit**
+
+Blocked for now: code and tests are complete, but git commit requires escalation and the environment rejected escalation due the current usage/approval limit. Commit when available.
 
 ```bash
 git add src
@@ -821,7 +825,7 @@ git commit -m "feat: adopt ready-work executor scheduling"
 - Modify: `src/executor.ts`
 - Modify: `src/backlog-executor.ts`
 
-- [ ] **Step 1: Add prompt options for project context**
+- [x] **Step 1: Add prompt options for project context**
 
 Current local `buildTaskPrompt` accepts `PromptOptions` for memory.
 
@@ -833,7 +837,7 @@ projectContext?: ProjectContext
 
 Do not replace memory.
 
-- [ ] **Step 2: Port upstream project-context rendering**
+- [x] **Step 2: Port upstream project-context rendering**
 
 Adapt upstream prompt sections:
 
@@ -844,7 +848,7 @@ Adapt upstream prompt sections:
 
 Keep local memory rendering in its own section.
 
-- [ ] **Step 3: Thread project context through execution**
+- [x] **Step 3: Thread project context through execution**
 
 Pass `dag.meta.projectContext` into:
 
@@ -852,7 +856,7 @@ Pass `dag.meta.projectContext` into:
 - backlog execution
 - any remaining trivial batch prompt path
 
-- [ ] **Step 4: Add prompt tests**
+- [x] **Step 4: Add prompt tests**
 
 Cover:
 
@@ -862,7 +866,7 @@ Cover:
 - non-UI task omits UI-only shared components/theme token pointer
 - UI task uses `figmaToolset` when present
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -873,6 +877,8 @@ npm run build && node --test build/prompt.test.js
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
+
+Blocked for now: implementation and verification are complete, but git commit requires escalation and the environment rejected escalation due the current usage/approval limit. Commit when available.
 
 ```bash
 git add src/prompt.ts src/prompt.test.ts src/executor.ts src/backlog-executor.ts src/executor
@@ -889,7 +895,7 @@ git commit -m "feat: add dag project context prompts"
 - Modify: `skills/decompose/SKILL.md`
 - Modify: any schema references found by `rg "projectContext|reviewVerdict|contracts.inputs|input.source|source.*dependencies" agents skills references README.md ARCHITECTURE.md`
 
-- [ ] **Step 1: Document `meta.projectContext`**
+- [x] **Step 1: Document `meta.projectContext`**
 
 Port the upstream decomposer instructions for deriving project context once per DAG.
 
@@ -899,7 +905,7 @@ Make clear:
 - large token maps are referenced by path
 - UI-only context should not be forced onto non-UI tasks
 
-- [ ] **Step 2: Document source dependency rule**
+- [x] **Step 2: Document source dependency rule**
 
 Update DAG authoring docs:
 
@@ -907,11 +913,11 @@ Update DAG authoring docs:
 - input name resolves against the source producer's output of the same name
 - same-named outputs from unrelated tasks do not satisfy contracts
 
-- [ ] **Step 3: Document `meta.reviewVerdict` only where review flow uses it**
+- [x] **Step 3: Document `meta.reviewVerdict` only where review flow uses it**
 
 Add or update decompose-first review docs without breaking existing local workflow.
 
-- [ ] **Step 4: Verify docs references**
+- [x] **Step 4: Verify docs references**
 
 Run:
 
@@ -922,6 +928,8 @@ rg -n "projectContext|reviewVerdict|source.*depend|input.source" agents skills r
 Expected: docs consistently describe the new schema and validation rule.
 
 - [ ] **Step 5: Commit**
+
+Blocked for now: docs are updated and `npm run build` still passes, but git commit requires escalation and the environment rejected escalation due the current usage/approval limit. Commit when available.
 
 ```bash
 git add agents skills references README.md ARCHITECTURE.md
@@ -949,7 +957,7 @@ git commit -m "docs: document dag project context and contract sources"
   - `references/review-dimensions.md`
   - `references/dag-review-dimensions.md`
 
-- [ ] **Step 1: Add `/cleanup` skill**
+- [x] **Step 1: Add `/cleanup` skill**
 
 Port upstream `skills/cleanup/SKILL.md`.
 
@@ -960,13 +968,15 @@ Local requirements:
 - autonomous mode can skip hard-error prompting
 - compatible phase numbering with local `/auto-implement`
 
-- [ ] **Step 2: Update auto-implement cleanup phase**
+- [x] **Step 2: Update auto-implement cleanup phase**
 
 Remove language saying this plugin does not ship `/cleanup`.
 
 Make `/cleanup` a normal Phase 5 dependency.
 
-- [ ] **Step 3: Decide and apply review fan-out migration**
+- [x] **Step 3: Decide and apply review fan-out migration**
+
+Decision: keep the local `review-triager` / `/triage-review` workflow for now instead of adopting upstream `review-finder` / `review-verifier` fan-out. The scan confirms remaining triage references point to existing local agents/skills.
 
 Before editing review flow, inspect local Codex/Loom review skills:
 
@@ -989,7 +999,7 @@ If not adopting for Codex yet:
 - leave Codex plugin docs unchanged
 - document the intentional difference in `README.md` or `ARCHITECTURE.md`
 
-- [ ] **Step 4: Update autonomous workflow docs**
+- [x] **Step 4: Update autonomous workflow docs**
 
 Port upstream workflow language:
 
@@ -999,7 +1009,7 @@ Port upstream workflow language:
 - `/plan-from-spec` auto-runs plan reviewer and advances only on READY
 - decompose-first path uses DAG review gate
 
-- [ ] **Step 5: Verify references**
+- [x] **Step 5: Verify references**
 
 Run:
 
@@ -1014,6 +1024,8 @@ Expected:
 - Codex plugin docs do not claim missing agents exist
 
 - [ ] **Step 6: Commit**
+
+Blocked for now: cleanup/workflow docs are updated and `npm run build` passes, but git commit requires escalation and the environment rejected escalation due the current usage/approval limit. Commit when available.
 
 ```bash
 git add skills agents references README.md ARCHITECTURE.md codex/plugins/loom
@@ -1033,7 +1045,7 @@ git commit -m "feat: ship cleanup skill and update workflow docs"
 - Modify: `package.json`
 - Modify: `package-lock.json`
 
-- [ ] **Step 1: Update README CLI flags**
+- [x] **Step 1: Update README CLI flags**
 
 Document:
 
@@ -1045,7 +1057,7 @@ Document:
 - `--memory` remains local
 - corpus archive environment variables
 
-- [ ] **Step 2: Update event documentation**
+- [x] **Step 2: Update event documentation**
 
 Document:
 
@@ -1056,7 +1068,7 @@ Document:
 - `worktree.merged.baseShaAfter`
 - source-routed contract behavior
 
-- [ ] **Step 3: Update architecture**
+- [x] **Step 3: Update architecture**
 
 Describe:
 
@@ -1066,7 +1078,7 @@ Describe:
 - metrics/diff/corpus support modules
 - provider/backlog/memory local extensions
 
-- [ ] **Step 4: Update changelog**
+- [x] **Step 4: Update changelog**
 
 Add `0.4.0` or `[Unreleased]` entries covering:
 
@@ -1079,7 +1091,7 @@ Add `0.4.0` or `[Unreleased]` entries covering:
 - cleanup skill
 - local preservation of Codex/backlog/quota/memory/readiness
 
-- [ ] **Step 5: Bump package version**
+- [x] **Step 5: Bump package version**
 
 Update:
 
@@ -1088,7 +1100,7 @@ Update:
 
 Do not remove local `bin` entries for Loom supervisor unless explicitly obsolete.
 
-- [ ] **Step 6: Verify docs and package**
+- [x] **Step 6: Verify docs and package**
 
 Run:
 
@@ -1102,6 +1114,8 @@ Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
+Blocked for now: docs/package updates are complete and `npm install --package-lock-only`, `npm run build`, and `npm run test` pass, but git commit requires escalation and the environment rejected escalation due the current usage/approval limit. Commit when available.
+
 ```bash
 git add README.md ARCHITECTURE.md CHANGELOG.md CHEATSHEET.md package.json package-lock.json
 git commit -m "docs: document executor 0.4 adoption"
@@ -1113,7 +1127,7 @@ git commit -m "docs: document executor 0.4 adoption"
 
 **Files:** none unless fixes are required
 
-- [ ] **Step 1: Full test suite**
+- [x] **Step 1: Full test suite**
 
 Run:
 
@@ -1123,7 +1137,7 @@ npm run test
 
 Expected: PASS.
 
-- [ ] **Step 2: Standalone command smoke**
+- [x] **Step 2: Standalone command smoke**
 
 Run:
 
@@ -1139,7 +1153,9 @@ Expected:
 - first three commands succeed
 - `--metrics` without logs exits 1 with usage
 
-- [ ] **Step 3: Diff and metrics fixture smoke**
+Observed: `--slots` and `--decomposition-stats` succeed; `--dag-readiness scripts/smoke-dag.json` exits 1 with the existing stricter readiness findings for the current fixture; `--metrics` without logs exits 1 with usage.
+
+- [x] **Step 3: Diff and metrics fixture smoke**
 
 Create or reuse a small temporary DAG/event fixture under `/tmp`, then run:
 
@@ -1153,7 +1169,7 @@ Expected:
 - metrics prints a report
 - diff-view writes `/tmp/<fixture>.diff.html`
 
-- [ ] **Step 4: Backlog dispatch smoke**
+- [x] **Step 4: Backlog dispatch smoke**
 
 Run a no-execution or stub-safe check proving `--backlog` still dispatches through local backlog code.
 
@@ -1165,7 +1181,7 @@ rg -n "executeBacklog|backlog \\?" src/index.ts
 
 Expected: `executeBacklog` remains imported and selected only when `--backlog` is passed.
 
-- [ ] **Step 5: Final status**
+- [x] **Step 5: Final status**
 
 Run:
 
@@ -1175,7 +1191,11 @@ git status --short
 
 Expected: clean or only intentionally untracked spec/plan docs if they were not committed with the implementation branch.
 
+Observed: worktree is intentionally dirty because Tasks 10-15 and final smoke updates could not be committed while git escalation is blocked by the current usage/approval limit. There are also `codex/plugins/loom/...` changes/untracked mirrored skill directories present in the worktree that were not intentionally edited in this pass and were left untouched.
+
 - [ ] **Step 6: Final commit if fixes were needed**
+
+Blocked for now: final smoke plan updates are complete, but git commit requires escalation and the environment rejected escalation due the current usage/approval limit. Commit when available.
 
 ```bash
 git add .

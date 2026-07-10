@@ -23,8 +23,14 @@ The entry point parses positional and keyword arguments:
 | `--slots`                        | Print machine-wide slot snapshot and exit            |
 | `--memory=<path>`                | Use a specific curated project memory file           |
 | `--no-memory`                    | Disable curated project memory prompt injection      |
+| `--metrics <log...>`             | Summarize one or more event logs                      |
+| `--diff-view <dag>`              | Render an HTML diff view for a completed run          |
 
 After parsing, it reads the DAG file, validates it with Zod (`validateDAG`), builds an `ExecutorConfig`, installs a cooperative SIGINT handler (first Ctrl-C sets AbortController; second force-exits), then calls `executeDAG`.
+
+After execution, `archiveRun` stores the DAG and event log in the local corpus
+best-effort. Standalone analysis modes use `metrics.ts` for run summaries and
+`diff-view.ts` for SHA-bounded per-task/aggregate diff views.
 
 ### 2. State Initialisation
 
@@ -41,48 +47,51 @@ The dag-level lock (`acquireLock`) is claimed at this point to prevent concurren
 
 ### 3. Baseline Capture
 
-Before entering the layer loop, the executor captures:
+Before entering the ready-work loop, the executor captures:
 
 ```
 baseBranch   = git branch --show-current
-baseCommitSha = git rev-parse HEAD   (mutable — updated after each trivial batch and after each merge)
+baseCommitSha = git rev-parse HEAD   (mutable — updated after each eager land)
 ```
 
 `dag.started` is emitted via `emitHelper` (see Invariant d).
 
-### 4. Layer Loop
+Task prompts are built through `src/prompt.ts`. The optional DAG-level
+`meta.projectContext` carries run-wide repo facts derived once by the decomposer:
+shared UI components, project conventions, custom Figma tool names, and a
+`themeTokensDoc` pointer. The executor inlines those facts alongside curated
+project memory without replacing memory; UI-only fields are rendered only for UI
+tasks.
 
-`dag.executionLayers` is iterated in ascending `layer` order. Layers numbered below `state.currentLayer` are skipped (resume skip-ahead).
+### 4. Ready-Work Loop
 
-**Empty-tasks fast path** — if every task in a layer is already `completed`:
+The main executor no longer uses a layer start barrier. `reconstructReadyState`
+builds an unmet-dependency count and initial ready queue from the event-derived
+state. A task starts as soon as its dependencies are completed and merged; each
+completed producer lands eagerly through `createWriterLane` / `landWorktree`, so
+consumers branch from a base that already contains their inputs.
 
-- Check for pending-merge tasks (completed but never merged on a prior interrupted run). If found, `mergeLayerWorktrees` is called immediately, then `baseCommitSha` is updated.
-- Emit `layer.completed` and continue.
+`dag.executionLayers` remain important, but only as Tier-2 verification
+checkpoints and progress markers. When the final task in a layer settles, the
+executor either emits non-advancing `layer.failed` for permanent failures or runs
+the merged-main Tier-2 gate and emits `layer.completed`.
 
-**Active layer** — emit `layer.started`, verify all declared dependencies are `completed`, then split the layer's tasks by weight.
+### 5a. Trivial Tasks
 
-### 5a. Trivial Batch (weight = `'trivial'`)
+In main ready-work mode, trivial tasks run as normal one-task worktree sessions.
+`src/executor/trivial-batch.ts` is retained for compatibility paths and can be
+removed only after a cleanup pass proves no local callers/tests still need it.
 
-All trivial tasks in the layer are collected and sent as a single batched Claude Code session running in `process.cwd()` (the main branch, no worktree):
+### 5b. Worktree Tasks
 
-1. Emit `task.started` for each task.
-2. `buildBatchedTrivialPrompt(tasks)` — single compound prompt.
-3. `runQuery` with `TRIVIAL_TOOLS` (no `Agent` tool) and a shared deadline covering all tasks.
-4. On success: `autoCommit` scoped to declared file paths + contract outputs.
-5. `git rev-parse HEAD` → update `baseCommitSha` (the batch advanced HEAD on the main branch).
-6. Per-task no-op check: if a task declared file outputs but none appear in `filesModified`, emit `task.failed` instead of `task.completed`.
-7. Emit `task.completed` or `task.failed` per task.
-8. **Tier-1 verification** (after the no-op loop settles, when no task permanently no-op'd): run the detected checks (`src/verify/`) against the batch's committed changes on main; on failure, re-invoke the batch session up to `VERIFICATION_MAX_FIX_ATTEMPTS` with the errors (committing each fixup). Exhaustion → emit `task.verification-failed` per task and return failure.
-9. If any task failed (no-op or verification): `pauseDag` (state saved, resume with `--resume`). The committed work stays on main — there is no worktree to discard.
-
-### 5b. Non-Trivial Worktree Tasks (weight = `'standard'` | `'heavy'`)
-
-Each non-trivial task gets an isolated git worktree:
+Each task gets an isolated git worktree:
 
 1. `createWorktreeSafe(task.id, baseBranch, { forceResetIds })` — creates or force-resets the worktree on a branch named after the task ID.
 2. Emit `worktree.created` + `task.started`.
 
-All worktrees are then executed concurrently (`Promise.allSettled`):
+Ready tasks are executed concurrently up to `MAX_GLOBAL_SLOTS`; the loop awaits
+the first settled task with `Promise.race` and routes the outcome without letting
+in-flight promises reject out of the scheduler.
 
 #### Slot Claim
 
@@ -155,6 +164,12 @@ Emit `worktree.merged` per task.
 After the merge (and base re-record), for **every** layer including the last — i.e. *outside* the next-layer contract guard below — the executor runs the detected checks (`src/verify/`) against the **whole** of merged main (`changedFiles: []`, so scoped commands fall back to their script's own default target; `process.cwd()` has `node_modules`, so the JS checks Tier-1 skipped in deps-less worktrees actually run here). Deliberately NOT scoped to per-task `filesModified` — that field is display-capped and can be empty, and scoping could never catch cross-file interaction regressions. On failure: emit `layer.verification-failed` → `pauseDag` (no auto-fix — a human fixes and `--resume` re-enters the layer to re-run the gate). Skipped under `--no-verify` or when nothing was detected; if every check skips on merged main, a loud warning is logged instead of a silent pass. This replaced the old `runPostExecution`.
 
 ### 8. Contract Verification
+
+Contract checks are source-routed. Each input contract names both the input name and
+the producer task in `{type?, source}`; validation requires `input.source` to be a
+known task listed in the consumer's `dependencies`. The verifier resolves an input
+only through `taskMap.get(input.source)` and that producer's like-named output, never
+by scanning unrelated producers for the same output name.
 
 Between every pair of adjacent layers (skipped after the final layer), `verifyLayerContracts` checks that every input contract of the next layer's tasks is satisfied by the completed tasks' outputs:
 

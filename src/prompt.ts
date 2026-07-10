@@ -1,5 +1,20 @@
-import type { ContractOutput, DAGTask } from './types.js';
+import type { ContractOutput, DAGTask, ProjectContext } from './types.js';
 import type { ProjectMemory } from './memory.js';
+
+const DEFAULT_FIGMA_TOOLSET = [
+  'mcp__figma-console__figma_get_component_for_development',
+  'mcp__figma-desktop__get_design_context',
+];
+
+const figmaToolList = (projectContext?: ProjectContext): string[] =>
+  projectContext?.figmaToolset && projectContext.figmaToolset.length > 0
+    ? projectContext.figmaToolset
+    : DEFAULT_FIGMA_TOOLSET;
+
+const isUITask = (task: DAGTask): boolean =>
+  Boolean(task.context.figmaRef) ||
+  Boolean(task.context.layoutSpec) ||
+  task.context.files.some((f) => f.includes('style.ts') || f.includes('Style.ts'));
 
 // Prepended to the failure detail when re-invoking a session whose changes failed
 // automated verification (Tier-1). The executor runs verification itself after the
@@ -40,30 +55,56 @@ const renderProjectMemory = (memory: ProjectMemory | null | undefined): string[]
   ];
 };
 
-const buildPhaseZero = (task: DAGTask): string[] => {
+const renderProjectContext = (projectContext: ProjectContext | undefined, uiTask: boolean): string[] => {
+  const body: string[] = [];
+
+  if (projectContext?.conventions && projectContext.conventions.length > 0) {
+    body.push('Project-wide conventions:');
+    for (const convention of projectContext.conventions) {
+      body.push(`- ${convention}`);
+    }
+    body.push('');
+  }
+
+  if (uiTask) {
+    if (projectContext?.sharedComponents) {
+      body.push('Shared components — reuse before recreating:', projectContext.sharedComponents, '');
+    }
+    if (projectContext?.themeTokensDoc) {
+      body.push(
+        `Design tokens: read \`${projectContext.themeTokensDoc}\` for the full token map before choosing token names.`,
+        '',
+      );
+    }
+  }
+
+  return body.length > 0 ? ['## Project Context', ...body] : [];
+};
+
+const buildPhaseZero = (task: DAGTask, projectContext?: ProjectContext): string[] => {
   const sections: string[] = [];
   const figmaRef = task.context.figmaRef;
 
   if (figmaRef) {
+    const tools = figmaToolList(projectContext);
     sections.push('## Phase 0: Design Research (MANDATORY — complete before writing styled code)');
     sections.push('');
 
     if (figmaRef.nodeId) {
       sections.push(
-        '1. Query `mcp__figma-console__figma_get_component_for_development` with nodeId ' +
+        `1. Query your Figma MCP dev-spec tool (for example \`${tools[0]}\`) with nodeId ` +
           `\`${figmaRef.nodeId}\` to get exact design specs`,
       );
     } else if (figmaRef.url) {
       sections.push(
-        `1. Use \`mcp__figma-console__figma_navigate\` to navigate to: ${figmaRef.url}`,
-        '   Then use `mcp__figma-console__figma_take_screenshot` + `mcp__figma-console__figma_get_component` to extract tokens',
+        `1. Use your Figma MCP navigate, screenshot, and component tools to open ${figmaRef.url} and extract tokens`,
       );
     }
 
     sections.push(
       '2. Document every token you find: colors, sizes, spacing, font weights, radii, borders',
-      '3. Cross-reference tokens with `src/configs/theme/colors.ts` to find the correct `g`-prefixed theme tokens',
-      '4. Map Figma values to codebase equivalents (e.g. Figma "#1A1A1A" → `gTextBody`)',
+      "3. Cross-reference tokens with this repo's theme/token definitions to find the correct theme tokens",
+      "4. Map Figma values to the codebase equivalents using this repo's token names",
     );
 
     if (figmaRef.hints && figmaRef.hints.length > 0) {
@@ -78,17 +119,12 @@ const buildPhaseZero = (task: DAGTask): string[] => {
   }
 
   // Component discovery — always included for UI tasks (tasks with figmaRef, layoutSpec, or style-related files)
-  const isUITask =
-    figmaRef ||
-    task.context.layoutSpec ||
-    task.context.files.some((f) => f.includes('style.ts') || f.includes('Style.ts'));
-
-  if (isUITask) {
+  if (isUITask(task)) {
     sections.push(
       '### Understand Existing Styles (BEFORE modifying any styled code)',
       '',
       'Before changing any style property, read the FULL style chain:',
-      "- Read the component's `style.ts` completely — understand every existing property",
+      "- Read the component's style file completely — understand every existing property",
       '- Read the component file to see how styled components are composed',
       '- Read parent components that render this component — understand the layout context (flex direction, alignment, spacing)',
       '- A property you overlook (padding, flex, margin, overflow) can silently conflict with your changes',
@@ -98,7 +134,7 @@ const buildPhaseZero = (task: DAGTask): string[] => {
       '',
       'Before creating ANY new styled component, search for existing equivalents:',
       '- Grep for component names that match what you need (Button, Input, Card, Sheet, Tag, etc.)',
-      '- Check `src/components/common/` for shared components (e.g. PrimaryButton, SecondaryButton, ThemedText)',
+      "- Check the repo's shared/common component directories for existing equivalents before building new ones",
       '- If a shared component does 80%+ of what you need, USE IT. Do not recreate.',
       '- Document which shared components you found and your use/skip decision with reasoning.',
       '',
@@ -173,6 +209,7 @@ const buildVerificationProtocol = (task: DAGTask): string[] => {
 
 interface PromptOptions {
   projectMemory?: ProjectMemory | null;
+  projectContext?: ProjectContext;
 }
 
 export const buildTaskPrompt = (task: DAGTask, options: PromptOptions = {}): string => {
@@ -188,11 +225,9 @@ export const buildTaskPrompt = (task: DAGTask, options: PromptOptions = {}): str
     'file modifications is a FAILURE — even if you believe the work is already done,',
     'verify each declared output exists on disk and contains the required changes.',
     '',
-    '## Project Context',
-    'Read `.claude/references/design-system-tokens.md` if your task involves UI/styling — it maps Figma tokens to codebase theme tokens.',
-    '',
   );
 
+  sections.push(...renderProjectContext(options.projectContext, isUITask(task)));
   sections.push(...renderProjectMemory(options.projectMemory));
 
   // Task
@@ -230,7 +265,7 @@ export const buildTaskPrompt = (task: DAGTask, options: PromptOptions = {}): str
   );
 
   // Phase 0: Design Research + Component Discovery
-  sections.push(...buildPhaseZero(task));
+  sections.push(...buildPhaseZero(task, options.projectContext));
 
   // Related Patterns
   if (task.context.relatedPatterns && task.context.relatedPatterns.length > 0) {
@@ -261,8 +296,7 @@ export const buildTaskPrompt = (task: DAGTask, options: PromptOptions = {}): str
     sections.push(
       'The following tokens were extracted from the plan. They may be APPROXIMATE or WRONG.',
       'Before writing styled code, you MUST query Figma MCP tools to verify exact values:',
-      '- `mcp__figma-desktop__get_design_context` — structural overview with resolved tokens',
-      '- `mcp__figma-console__figma_get_component_for_development` — dev-ready specs with exact sizes',
+      ...figmaToolList(options.projectContext).map((tool) => `- \`${tool}\``),
       '',
       'Figma is the source of truth. If plan values differ from Figma, use Figma values.',
       'Pay special attention to: icon sizes, border colors, font sizes/weights, and layout alignment.',
@@ -311,6 +345,7 @@ export const buildBatchedTrivialPrompt = (tasks: DAGTask[], options: PromptOptio
     '',
   );
 
+  sections.push(...renderProjectContext(options.projectContext, tasks.some(isUITask)));
   sections.push(...renderProjectMemory(options.projectMemory));
 
   for (const [i, task] of tasks.entries()) {
