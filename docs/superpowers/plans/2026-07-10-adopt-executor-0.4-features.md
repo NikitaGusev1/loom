@@ -339,7 +339,7 @@ git commit -m "feat: add run pause causes and diff sha events"
 - Create: `src/metrics.test.ts`
 - Modify: `src/consts.ts` if model context-window constants are missing.
 
-- [ ] **Step 1: Port metrics module**
+- [x] **Step 1: Port metrics module**
 
 Adapt upstream `src/metrics.ts`.
 
@@ -352,7 +352,7 @@ Local requirements:
 - Preserve back-compat reconstruction from preceding events for old logs.
 - Join sibling DAG JSON for task weights and degrade to `unknown` when absent.
 
-- [ ] **Step 2: Port metrics tests**
+- [x] **Step 2: Port metrics tests**
 
 Adapt upstream `src/metrics.test.ts`.
 
@@ -362,7 +362,7 @@ Add local tests:
 - quota pause via legacy `dag.paused.quota` without cause
 - local provider config does not crash metrics
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 
@@ -372,7 +372,7 @@ npm run build && node --test build/metrics.test.js
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/metrics.ts src/metrics.test.ts src/consts.ts

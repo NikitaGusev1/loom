@@ -52,3 +52,25 @@ export const WEIGHT_VERIFICATION_TIMEOUT_MS: Record<DAGTask['weight'], number> =
 export const VERIFICATION_MAX_FIX_ATTEMPTS = 2;
 
 export const BACKLOG_PAUSE_ABORT_REASON = 'backlog-pause';
+
+export const MODEL_CONTEXT_WINDOW: Record<string, number> = {
+  'claude-opus-4-8': 1_000_000,
+  'claude-sonnet-5': 1_000_000,
+  'claude-sonnet-4-6': 1_000_000,
+  'claude-haiku-4-5-20251001': 200_000,
+  'account-default': 250_000,
+  'gpt-5': 400_000,
+  'gpt-5-mini': 400_000,
+};
+
+export const DEFAULT_CONTEXT_WINDOW = 250_000;
+
+export const DEFAULT_EXECUTOR_MODELS = {
+  provider: 'codex',
+  defaultModel: 'account-default',
+  heavyModel: 'account-default',
+  maxTurns: 80,
+  permissionMode: 'bypassPermissions',
+  dagPath: '',
+  dryRun: false,
+} as const;

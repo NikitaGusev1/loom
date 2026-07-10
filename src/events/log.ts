@@ -3,6 +3,9 @@ import type { DagEvent } from './types.js';
 
 export const getEventLogPath = (dagPath: string): string => dagPath.replace(/\.json$/, '.events.jsonl');
 
+export const getDagPathFromEventLog = (eventLogPath: string): string =>
+  eventLogPath.replace(/\.events\.jsonl$/, '.json');
+
 export class EventLogParseError extends Error {
   lineNumber: number;
   lineContent: string;
@@ -40,5 +43,12 @@ export const readEvents = (logPath: string): DagEvent[] => {
     }
   }
 
+  return events;
+};
+
+export const readRequiredEvents = (logPath: string): DagEvent[] => {
+  if (!existsSync(logPath)) throw new Error(`event log not found: ${logPath}`);
+  const events = readEvents(logPath);
+  if (events.length === 0) throw new Error(`event log is empty: ${logPath}`);
   return events;
 };
