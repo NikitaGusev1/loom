@@ -42,18 +42,17 @@ export const reusableBacklogWorktree = (
 export const shouldPauseForNoReadyWork = (ready: readonly DAGTask[], activeTaskIds: ReadonlySet<string>): boolean =>
   ready.length === 0 && activeTaskIds.size === 0;
 
+export const observeBacklogOutcome = <T>(taskId: string, promise: Promise<T>): Promise<SettledBacklogOutcome<T>> =>
+  promise.then(
+    (outcome) => ({ status: 'fulfilled' as const, taskId, outcome }),
+    (reason: unknown) => ({ status: 'rejected' as const, taskId, reason }),
+  );
+
 export const waitForNextBacklogOutcome = async <T>(
-  running: ReadonlyMap<string, Promise<T>>,
+  running: ReadonlyMap<string, Promise<SettledBacklogOutcome<T>>>,
 ): Promise<SettledBacklogOutcome<T>> => {
   if (running.size === 0) throw new Error('Cannot wait for backlog outcome with no running tasks');
-  return Promise.race(
-    [...running.entries()].map(([taskId, promise]) =>
-      promise.then(
-        (outcome) => ({ status: 'fulfilled' as const, taskId, outcome }),
-        (reason: unknown) => ({ status: 'rejected' as const, taskId, reason }),
-      ),
-    ),
-  );
+  return Promise.race(running.values());
 };
 
 export const stopRunningBacklogTasks = async <T>(

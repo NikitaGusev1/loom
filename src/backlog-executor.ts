@@ -41,11 +41,13 @@ import { analyzeBacklogReadiness } from './backlog-readiness.js';
 import {
   chooseStartableBacklogTasks,
   connectBacklogPauseAbort,
+  observeBacklogOutcome,
   pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
   shouldPauseForNoReadyWork,
   stopRunningBacklogTasks,
   summarizeBlockedBacklogPause,
+  type SettledBacklogOutcome,
   waitForNextBacklogOutcome,
 } from './backlog-scheduler.js';
 import { BACKLOG_PAUSE_ABORT_REASON } from './consts.js';
@@ -169,7 +171,7 @@ export const executeBacklog = async ({
   const memoryStatus = describeProjectMemory(projectMemory, config.disableMemory);
   if (memoryStatus) log.info(memoryStatus);
 
-  const running = new Map<string, Promise<BacklogTaskOutcome>>();
+  const running = new Map<string, Promise<SettledBacklogOutcome<BacklogTaskOutcome>>>();
   const retryAttempts = new Map<string, number>();
   const taskAttemptController = new AbortController();
   connectBacklogPauseAbort(signal, taskAttemptController, BACKLOG_PAUSE_ABORT_REASON);
@@ -372,7 +374,7 @@ export const executeBacklog = async ({
       worktreeBranch: wt.branch,
     });
     saveState(statePath, state);
-    running.set(task.id, runBacklogTaskAttempt(task, wt.path, retryAttempts));
+    running.set(task.id, observeBacklogOutcome(task.id, runBacklogTaskAttempt(task, wt.path, retryAttempts)));
   };
 
   const startRetry = (task: DAGTask, delayMs: number): void => {
@@ -385,32 +387,35 @@ export const executeBacklog = async ({
 
     running.set(
       task.id,
-      new Promise<BacklogTaskOutcome>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          if (taskAttemptSignal.aborted) {
-            reject(new Error('signal aborted'));
-            return;
-          }
-          emitTaskStarted({
-            task,
-            ts: new Date().toISOString(),
-            dagId,
-            layer: layerFor(task.id),
-            emit,
-            worktreePath,
-            worktreeBranch,
-          });
-          resolve(runBacklogTaskAttempt(task, worktreePath, retryAttempts));
-        }, delayMs);
-        taskAttemptSignal.addEventListener(
-          'abort',
-          () => {
-            clearTimeout(timer);
-            reject(new Error('signal aborted'));
-          },
-          { once: true },
-        );
-      }),
+      observeBacklogOutcome(
+        task.id,
+        new Promise<BacklogTaskOutcome>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            if (taskAttemptSignal.aborted) {
+              reject(new Error('signal aborted'));
+              return;
+            }
+            emitTaskStarted({
+              task,
+              ts: new Date().toISOString(),
+              dagId,
+              layer: layerFor(task.id),
+              emit,
+              worktreePath,
+              worktreeBranch,
+            });
+            resolve(runBacklogTaskAttempt(task, worktreePath, retryAttempts));
+          }, delayMs);
+          taskAttemptSignal.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              reject(new Error('signal aborted'));
+            },
+            { once: true },
+          );
+        }),
+      ),
     );
   };
 

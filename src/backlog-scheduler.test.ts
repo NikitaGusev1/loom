@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   chooseStartableBacklogTasks,
   connectBacklogPauseAbort,
+  observeBacklogOutcome,
   pendingMergeBacklogTaskIds,
   reusableBacklogWorktree,
   stopRunningBacklogTasks,
@@ -104,15 +105,26 @@ describe('reusableBacklogWorktree', () => {
 });
 
 describe('waitForNextBacklogOutcome', () => {
+  it('normalizes a rejected promise without leaving it rejected for later handlers', async () => {
+    const failure = new Error('failed');
+    const observed = observeBacklogOutcome('task-a', Promise.reject(failure));
+
+    assert.deepEqual(await observed, { status: 'rejected', taskId: 'task-a', reason: failure });
+  });
+
   it('returns fulfilled outcomes with the task id', async () => {
-    const settled = await waitForNextBacklogOutcome(new Map([['task-a', Promise.resolve('ok')]]));
+    const settled = await waitForNextBacklogOutcome(
+      new Map([['task-a', observeBacklogOutcome('task-a', Promise.resolve('ok'))]]),
+    );
 
     assert.deepEqual(settled, { status: 'fulfilled', taskId: 'task-a', outcome: 'ok' });
   });
 
   it('returns rejected outcomes with the task id', async () => {
     const failure = new Error('failed');
-    const settled = await waitForNextBacklogOutcome(new Map([['task-a', Promise.reject(failure)]]));
+    const settled = await waitForNextBacklogOutcome(
+      new Map([['task-a', observeBacklogOutcome('task-a', Promise.reject(failure))]]),
+    );
 
     assert.deepEqual(settled, { status: 'rejected', taskId: 'task-a', reason: failure });
   });
