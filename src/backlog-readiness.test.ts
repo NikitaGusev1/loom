@@ -123,6 +123,24 @@ describe('analyzeBacklogReadiness', () => {
     assert.deepEqual(result.blocked, []);
   });
 
+  it('does not unblock dependents until completed worktree dependencies are merged', () => {
+    const result = analyzeBacklogReadiness(
+      dag([task('dependency'), task('child', ['dependency'])]),
+      state({
+        dependency: {
+          status: 'completed',
+          worktreeBranch: 'dag/dependency',
+          merged: false,
+        },
+        child: { status: 'pending' },
+      }),
+      decisions([]),
+    );
+
+    assert.deepEqual(result.ready, []);
+    assert.deepEqual(result.blocked, []);
+  });
+
   it('reports transitive dependency-blocked tasks when no runnable work remains', () => {
     const result = analyzeBacklogReadiness(
       dag([task('failed-root'), task('middle', ['failed-root']), task('leaf', ['middle'])]),

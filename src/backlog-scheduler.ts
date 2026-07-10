@@ -19,6 +19,14 @@ export const pendingMergeBacklogTaskIds = (
     })
     .map((task) => task.id);
 
+export const isBacklogTaskIntegrated = (taskState: TaskState | undefined): boolean =>
+  taskState?.status === 'completed' && (taskState.merged === true || !taskState.worktreeBranch);
+
+export const allBacklogTasksIntegrated = (
+  tasks: readonly DAGTask[],
+  taskStates: Readonly<Record<string, TaskState | undefined>>,
+): boolean => tasks.every((task) => isBacklogTaskIntegrated(taskStates[task.id]));
+
 export const connectBacklogPauseAbort = (
   externalSignal: AbortSignal | undefined,
   controller: AbortController,

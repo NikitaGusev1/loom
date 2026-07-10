@@ -39,6 +39,7 @@ import { runVerification, formatFailures } from './verify/run.js';
 import { describeProjectMemory, loadProjectMemory } from './memory.js';
 import { analyzeBacklogReadiness } from './backlog-readiness.js';
 import {
+  allBacklogTasksIntegrated,
   chooseStartableBacklogTasks,
   connectBacklogPauseAbort,
   observeBacklogOutcome,
@@ -426,8 +427,7 @@ export const executeBacklog = async ({
     const pausedAfterMerge = await mergeCompleted(pendingMerge);
     if (pausedAfterMerge) return pausedAfterMerge;
 
-    const completedCount = dag.tasks.filter((task) => state.tasks[task.id]?.status === 'completed').length;
-    if (completedCount === dag.tasks.length) break;
+    if (allBacklogTasksIntegrated(dag.tasks, state.tasks)) break;
 
     const events = readEvents(eventLogPath);
     const decisions = new Map(dag.tasks.map((task) => [task.id, decide(events, task.id)]));

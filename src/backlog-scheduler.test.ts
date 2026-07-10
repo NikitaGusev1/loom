@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  allBacklogTasksIntegrated,
   chooseStartableBacklogTasks,
   connectBacklogPauseAbort,
   observeBacklogOutcome,
@@ -83,6 +84,30 @@ describe('pendingMergeBacklogTaskIds', () => {
         new Set(),
       ),
       ['unmerged'],
+    );
+  });
+});
+
+describe('allBacklogTasksIntegrated', () => {
+  it('requires completed worktree tasks to be merged before the DAG can complete', () => {
+    assert.equal(
+      allBacklogTasksIntegrated([task('settled-but-unmerged')], {
+        'settled-but-unmerged': {
+          status: 'completed',
+          worktreeBranch: 'dag/settled-but-unmerged',
+          merged: false,
+        },
+      }),
+      false,
+    );
+  });
+
+  it('accepts completed tasks once their worktrees are merged', () => {
+    assert.equal(
+      allBacklogTasksIntegrated([task('merged')], {
+        merged: { status: 'completed', worktreeBranch: 'dag/merged', merged: true },
+      }),
+      true,
     );
   });
 });
