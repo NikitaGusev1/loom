@@ -1,5 +1,6 @@
 import type { BacklogBlockedTask, DAGTask, DecompositionDAG, ExecutionState } from './types.js';
 import type { Decision } from './policy/retry.js';
+import { isBacklogTaskIntegrated } from './backlog-scheduler.js';
 
 interface BacklogReadiness {
   ready: DAGTask[];
@@ -14,12 +15,13 @@ export const analyzeBacklogReadiness = (
   decisions: ReadonlyMap<string, Decision>,
 ): BacklogReadiness => {
   const taskById = new Map(dag.tasks.map((task) => [task.id, task]));
-  const completed = (id: string): boolean => state.tasks[id]?.status === 'completed';
+  const finished = (id: string): boolean => state.tasks[id]?.status === 'completed';
+  const dependencySatisfied = (id: string): boolean => isBacklogTaskIntegrated(state.tasks[id]);
   const blockedMemo = new Map<string, BacklogBlockedTask | null>();
 
   const blockedFor = (taskId: string, visiting = new Set<string>()): BacklogBlockedTask | null => {
     if (blockedMemo.has(taskId)) return blockedMemo.get(taskId) ?? null;
-    if (completed(taskId)) {
+    if (finished(taskId)) {
       blockedMemo.set(taskId, null);
       return null;
     }
@@ -70,13 +72,13 @@ export const analyzeBacklogReadiness = (
   const blocked: BacklogBlockedTask[] = [];
 
   for (const task of dag.tasks) {
-    if (completed(task.id)) continue;
+    if (finished(task.id)) continue;
     const blockedTask = blockedFor(task.id);
     if (blockedTask) {
       blocked.push(blockedTask);
       continue;
     }
-    if (task.dependencies.every(completed)) ready.push(task);
+    if (task.dependencies.every(dependencySatisfied)) ready.push(task);
   }
 
   return { ready, blocked };

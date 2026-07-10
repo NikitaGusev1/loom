@@ -50,6 +50,8 @@ export const WEIGHT_VERIFICATION_TIMEOUT_MS: Record<DAGTask['weight'], number> =
 // task is marked permanently verification-failed (and left unmerged).
 export const VERIFICATION_MAX_FIX_ATTEMPTS = 2;
 
+export const BACKLOG_PAUSE_ABORT_REASON = 'backlog-pause';
+
 export const ZERO_USAGE: TaskUsage = {
   inputTokens: 0,
   outputTokens: 0,

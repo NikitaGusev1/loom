@@ -348,7 +348,7 @@ After a task's session, the executor runs the target repo's **detected** test / 
 
 ### Backlog mode
 
-`--backlog` uses the same DAG file and event log, but treats the DAG as a persistent task backlog. On each loop it finds tasks whose dependencies are completed, runs the ready set in worktrees, merges successful work, runs merged-main verification, and repeats until the backlog is complete or no runnable task remains. Permanent failures block only their dependency descendants; unrelated ready tasks continue. When no runnable task remains, `dag.paused.blockedTasks` and `.state.json.blockedTasks` distinguish direct `permanent-failure` tasks from transitive `dependency-blocked` tasks.
+Backlog mode (`--backlog`) uses dependency-driven ready-work scheduling: each task still runs in its own worktree and is merged through the same safety gates, but newly unblocked tasks can start as soon as their dependencies merge instead of waiting for unrelated same-round work. Permanent failures block only their dependency descendants; unrelated ready tasks continue. When no runnable task remains, `dag.paused.blockedTasks` and `.state.json.blockedTasks` distinguish direct `permanent-failure` tasks from transitive `dependency-blocked` tasks.
 
 Resume is still event-log based:
 

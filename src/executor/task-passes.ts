@@ -12,7 +12,7 @@ import type { ProjectMemory } from '../memory.js';
 import { toErrorMessage } from '../exec.js';
 import { buildTaskPrompt, VERIFICATION_FIX_NOTICE } from '../prompt.js';
 import { resolveOutputFiles } from '../contracts.js';
-import { WEIGHT_DEADLINE_MS, VERIFICATION_MAX_FIX_ATTEMPTS } from '../consts.js';
+import { BACKLOG_PAUSE_ABORT_REASON, WEIGHT_DEADLINE_MS, VERIFICATION_MAX_FIX_ATTEMPTS } from '../consts.js';
 import { durationSinceStart, emitTaskFailed, emitTaskTimeout, emitTaskVerificationFailed } from '../events/emit.js';
 import type { ResolvedCommands } from '../verify/detect.js';
 import { runVerification, formatFailures, firstFailedKind } from '../verify/run.js';
@@ -38,6 +38,9 @@ interface ExecuteTaskPassesArgs {
   projectMemory?: ProjectMemory | null;
 }
 
+export const isBacklogPauseAbort = (signal: AbortSignal | undefined): boolean =>
+  signal?.aborted === true && signal.reason === BACKLOG_PAUSE_ABORT_REASON;
+
 export const executeTaskPasses = async ({
   task,
   config,
@@ -50,7 +53,12 @@ export const executeTaskPasses = async ({
   verifyCommands = {},
   signal,
   projectMemory,
-}: ExecuteTaskPassesArgs): Promise<{ usage?: TaskUsage; trace?: SessionTrace; failed: boolean }> => {
+}: ExecuteTaskPassesArgs): Promise<{
+  usage?: TaskUsage;
+  trace?: SessionTrace;
+  failed: boolean;
+  cancelled?: boolean;
+}> => {
   // Ensure .claude/ai/ exists in worktrees (gitignored)
   mkdirSync(join(cwd, '.claude/ai'), { recursive: true });
 
@@ -116,10 +124,18 @@ export const executeTaskPasses = async ({
       }
     }
 
+    if (isBacklogPauseAbort(signal)) {
+      return { failed: true, cancelled: true };
+    }
+
     await autoCommit(cwd, buildTaskCommitMessage(task), log, resolveOutputFiles(task), task.context.files);
 
     return { usage: sumUsage(usage, fixUsage), trace, failed: false };
   } catch (err) {
+    if (isBacklogPauseAbort(signal)) {
+      return { failed: true, cancelled: true };
+    }
+
     const ts = new Date().toISOString();
     const durationMs = durationSinceStart(state.tasks[task.id]?.startedAt, ts);
     const baseFields = { task, state, ts, durationMs, dagId, layer: layerNum, emit };

@@ -33,11 +33,25 @@ import {
   emitTaskStarted,
   emitWorktreeMerged,
 } from './events/emit.js';
-import { type Decision, decide } from './policy/retry.js';
+import { decide } from './policy/retry.js';
 import { resolveVerifyCommands } from './verify/detect.js';
 import { runVerification, formatFailures } from './verify/run.js';
 import { describeProjectMemory, loadProjectMemory } from './memory.js';
 import { analyzeBacklogReadiness } from './backlog-readiness.js';
+import {
+  allBacklogTasksIntegrated,
+  chooseStartableBacklogTasks,
+  connectBacklogPauseAbort,
+  observeBacklogOutcome,
+  pendingMergeBacklogTaskIds,
+  reusableBacklogWorktree,
+  shouldPauseForNoReadyWork,
+  stopRunningBacklogTasks,
+  summarizeBlockedBacklogPause,
+  type SettledBacklogOutcome,
+  waitForNextBacklogOutcome,
+} from './backlog-scheduler.js';
+import { BACKLOG_PAUSE_ABORT_REASON } from './consts.js';
 
 interface BacklogOptions {
   dag: DecompositionDAG;
@@ -46,6 +60,13 @@ interface BacklogOptions {
   resume?: boolean;
   rerunTaskIds?: string[];
 }
+
+type BacklogTaskOutcome =
+  | { kind: 'succeeded'; task: DAGTask }
+  | { kind: 'retry'; task: DAGTask; delayMs: number }
+  | { kind: 'quota'; task: DAGTask; reason: string; quota: QuotaLimitMetadata }
+  | { kind: 'permanent'; task: DAGTask; reason: string }
+  | { kind: 'cancelled'; task: DAGTask };
 
 const taskLayerMap = (dag: DecompositionDAG): Map<string, number> => {
   const layers = new Map<string, number>();
@@ -151,6 +172,21 @@ export const executeBacklog = async ({
   const memoryStatus = describeProjectMemory(projectMemory, config.disableMemory);
   if (memoryStatus) log.info(memoryStatus);
 
+  const running = new Map<string, Promise<SettledBacklogOutcome<BacklogTaskOutcome>>>();
+  const retryAttempts = new Map<string, number>();
+  const taskAttemptController = new AbortController();
+  connectBacklogPauseAbort(signal, taskAttemptController, BACKLOG_PAUSE_ABORT_REASON);
+  const taskAttemptSignal = taskAttemptController.signal;
+
+  const pauseAfterStoppingRunning = async (
+    reason: string,
+    blockedTasks?: BacklogBlockedTask[],
+    quota?: QuotaLimitMetadata,
+  ): Promise<ExecutionState> => {
+    await stopRunningBacklogTasks(running, taskAttemptController, BACKLOG_PAUSE_ABORT_REASON);
+    return pause(reason, blockedTasks, quota);
+  };
+
   const runMergedVerification = async (): Promise<ExecutionState | null> => {
     if (Object.keys(verifyCommands).length === 0) return null;
     const result = await runVerification({
@@ -162,7 +198,7 @@ export const executeBacklog = async ({
       log,
     });
     if (result.ok) return null;
-    return pause(`Backlog merged verification failed: ${formatFailures(result).slice(0, 2000)}`);
+    return pauseAfterStoppingRunning(`Backlog merged verification failed: ${formatFailures(result).slice(0, 2000)}`);
   };
 
   emit({
@@ -180,203 +216,306 @@ export const executeBacklog = async ({
   const mergeCompleted = async (taskIds: string[]): Promise<ExecutionState | null> => {
     if (taskIds.length === 0) return null;
     const baseUnchanged = await verifyBaseUnchanged(baseBranch, baseCommitSha);
-    if (!baseUnchanged) return pause(`Base branch "${baseBranch}" moved before backlog merge`);
+    if (!baseUnchanged) return pauseAfterStoppingRunning(`Base branch "${baseBranch}" moved before backlog merge`);
     const merged = await mergeLayerWorktrees(taskIds, (taskId) => {
       log.success(`Merged ${taskId}`);
       emitWorktreeMerged({ taskId, state, baseBranch, dagId, ts: new Date().toISOString(), emit });
     });
-    if (!merged.success) return pause(`Merge conflict in ${merged.failedAt}: ${merged.conflict}`);
+    if (!merged.success) return pauseAfterStoppingRunning(`Merge conflict in ${merged.failedAt}: ${merged.conflict}`);
     const { stdout } = await exec('git', ['rev-parse', 'HEAD']);
     baseCommitSha = stdout.trim();
     return runMergedVerification();
   };
 
-  for (;;) {
-    if (signal?.aborted) return pause('signal aborted');
+  const runBacklogTaskAttempt = async (
+    task: DAGTask,
+    worktreePath: string,
+    retryAttempts: Map<string, number>,
+  ): Promise<BacklogTaskOutcome> => {
+    const { usage, trace, failed, cancelled } = await executeTaskPasses({
+      task,
+      config,
+      state,
+      log,
+      cwd: worktreePath,
+      emit,
+      dagId,
+      layerNum: layerFor(task.id),
+      verifyCommands,
+      signal: taskAttemptSignal,
+      projectMemory,
+    });
+    if (cancelled) return { kind: 'cancelled', task };
+    if (failed) {
+      const decision = decide(readEvents(eventLogPath), task.id);
+      if (decision.kind === 'quota') {
+        return {
+          kind: 'quota',
+          task,
+          reason: `Quota limit reached while running ${task.id}: ${decision.reason}`,
+          quota: decision.quota,
+        };
+      }
+      if (decision.kind === 'retry') {
+        const attempt = (retryAttempts.get(task.id) ?? 0) + 1;
+        retryAttempts.set(task.id, attempt);
+        emitTaskRetry({
+          task,
+          ts: new Date().toISOString(),
+          dagId,
+          layer: layerFor(task.id),
+          emit,
+          attempt,
+          delayMs: decision.delayMs,
+          reason: state.tasks[task.id]?.error ?? 'unknown',
+          previousError: state.tasks[task.id]?.error,
+        });
+        return { kind: 'retry', task, delayMs: decision.delayMs };
+      }
+      if (decision.kind === 'permanent') {
+        return { kind: 'permanent', task, reason: decision.reason };
+      }
+      return { kind: 'succeeded', task };
+    }
 
-    const pendingMerge = dag.tasks
-      .filter((task) => state.tasks[task.id]?.status === 'completed' && state.tasks[task.id]?.merged !== true)
-      .map((task) => task.id);
+    const filesModified = await getFilesModified(worktreePath, baseBranch);
+    const ts = new Date().toISOString();
+    const durationMs = durationSinceStart(state.tasks[task.id]?.startedAt, ts);
+    const settle = await settleNoOpGate({
+      task,
+      cwd: worktreePath,
+      declaredOutputs: resolveOutputFiles(task),
+      trace,
+      usage,
+      state,
+      ts,
+      durationMs,
+      dagId,
+      layer: layerFor(task.id),
+      emit,
+      log,
+    });
+    if (!settle.ok) {
+      const decision = decide(readEvents(eventLogPath), task.id);
+      if (decision.kind === 'retry') {
+        const attempt = (retryAttempts.get(task.id) ?? 0) + 1;
+        retryAttempts.set(task.id, attempt);
+        emitTaskRetry({
+          task,
+          ts: new Date().toISOString(),
+          dagId,
+          layer: layerFor(task.id),
+          emit,
+          attempt,
+          delayMs: decision.delayMs,
+          reason: state.tasks[task.id]?.error ?? 'unknown',
+          previousError: state.tasks[task.id]?.error,
+        });
+        return { kind: 'retry', task, delayMs: decision.delayMs };
+      }
+      if (decision.kind === 'quota') {
+        return {
+          kind: 'quota',
+          task,
+          reason: `Quota limit reached while running ${task.id}: ${decision.reason}`,
+          quota: decision.quota,
+        };
+      }
+      if (decision.kind === 'permanent') {
+        return { kind: 'permanent', task, reason: decision.reason };
+      }
+      return { kind: 'succeeded', task };
+    }
+
+    emitTaskCompleted({
+      task,
+      state,
+      ts,
+      durationMs,
+      dagId,
+      layer: layerFor(task.id),
+      usage,
+      filesModified,
+      emit,
+    });
+    if (usage) log.taskUsage(task.id, usage as TaskUsage);
+    return { kind: 'succeeded', task };
+  };
+
+  let quotaPause: { reason: string; quota: QuotaLimitMetadata } | undefined;
+
+  const startTask = async (task: DAGTask): Promise<void> => {
+    const shouldForceReset = config.forceWorktreeResetTaskIds?.includes(task.id) ?? false;
+    const existingWorktree = shouldForceReset ? undefined : reusableBacklogWorktree(state.tasks[task.id]);
+    const wt =
+      existingWorktree ??
+      (await createWorktreeSafe(task.id, baseBranch, {
+        forceResetIds: config.forceWorktreeResetTaskIds,
+      }));
+    const ts = new Date().toISOString();
+    if (!existingWorktree) {
+      emit({
+        kind: 'worktree.created',
+        schemaVersion: DAG_EVENT_SCHEMA_VERSION,
+        ts,
+        dagId,
+        taskId: task.id,
+        worktreePath: wt.path,
+        branch: wt.branch,
+        baseBranch,
+      });
+    }
+    emitTaskStarted({
+      task,
+      ts,
+      dagId,
+      layer: layerFor(task.id),
+      emit,
+      worktreePath: wt.path,
+      worktreeBranch: wt.branch,
+    });
+    saveState(statePath, state);
+    running.set(task.id, observeBacklogOutcome(task.id, runBacklogTaskAttempt(task, wt.path, retryAttempts)));
+  };
+
+  const startRetry = (task: DAGTask, delayMs: number): void => {
+    const taskState = state.tasks[task.id];
+    const worktreePath = taskState?.worktreePath;
+    const worktreeBranch = taskState?.worktreeBranch;
+    if (!worktreePath || !worktreeBranch) {
+      throw new Error(`Cannot retry ${task.id}: missing worktree metadata`);
+    }
+
+    running.set(
+      task.id,
+      observeBacklogOutcome(
+        task.id,
+        new Promise<BacklogTaskOutcome>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            if (taskAttemptSignal.aborted) {
+              reject(new Error('signal aborted'));
+              return;
+            }
+            emitTaskStarted({
+              task,
+              ts: new Date().toISOString(),
+              dagId,
+              layer: layerFor(task.id),
+              emit,
+              worktreePath,
+              worktreeBranch,
+            });
+            resolve(runBacklogTaskAttempt(task, worktreePath, retryAttempts));
+          }, delayMs);
+          taskAttemptSignal.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              reject(new Error('signal aborted'));
+            },
+            { once: true },
+          );
+        }),
+      ),
+    );
+  };
+
+  for (;;) {
+    if (signal?.aborted) return pauseAfterStoppingRunning('signal aborted');
+
+    const pendingMerge = pendingMergeBacklogTaskIds(dag.tasks, state.tasks, new Set(running.keys()));
     const pausedAfterMerge = await mergeCompleted(pendingMerge);
     if (pausedAfterMerge) return pausedAfterMerge;
 
-    const completedCount = dag.tasks.filter((task) => state.tasks[task.id]?.status === 'completed').length;
-    if (completedCount === dag.tasks.length) break;
+    if (allBacklogTasksIntegrated(dag.tasks, state.tasks)) break;
 
     const events = readEvents(eventLogPath);
     const decisions = new Map(dag.tasks.map((task) => [task.id, decide(events, task.id)]));
     const { ready, blocked } = analyzeBacklogReadiness(dag, state, decisions);
-    if (ready.length === 0) {
-      if (blocked.length === 0) return pause('No ready backlog tasks');
 
-      const directFailures = blocked.filter((task) => task.kind === 'permanent-failure').map((task) => task.taskId);
-      const dependencyBlocked = blocked.filter((task) => task.kind === 'dependency-blocked').map((task) => task.taskId);
-      return pause(
-        `No ready backlog tasks; permanent failures: ${directFailures.join(', ') || 'none'}; dependency-blocked: ${dependencyBlocked.join(', ') || 'none'}`,
-        blocked,
-      );
+    if (!quotaPause) {
+      const startable = chooseStartableBacklogTasks(ready, new Set(running.keys()));
+      for (const task of startable) {
+        log.info(`Backlog starting: ${task.id}`);
+        await startTask(task);
+      }
     }
 
-    log.info(`Backlog ready: ${ready.map((task) => task.id).join(', ')}`);
+    if (shouldPauseForNoReadyWork(ready, new Set(running.keys()))) {
+      if (blocked.length === 0) return pause('No ready backlog tasks');
+      return pause(summarizeBlockedBacklogPause(blocked), blocked);
+    }
 
-    const worktrees = await Promise.all(
-      ready.map(async (task) => {
-        const wt = await createWorktreeSafe(task.id, baseBranch, {
-          forceResetIds: config.forceWorktreeResetTaskIds,
-        });
-        const ts = new Date().toISOString();
-        emit({
-          kind: 'worktree.created',
-          schemaVersion: DAG_EVENT_SCHEMA_VERSION,
-          ts,
-          dagId,
-          taskId: task.id,
-          worktreePath: wt.path,
-          branch: wt.branch,
-          baseBranch,
-        });
-        emitTaskStarted({
+    if (running.size === 0) {
+      if (quotaPause)
+        return pause(`${quotaPause.reason}. Resume with --resume after the limit resets.`, undefined, quotaPause.quota);
+      continue;
+    }
+
+    const settled = await waitForNextBacklogOutcome(running);
+    running.delete(settled.taskId);
+
+    if (settled.status === 'rejected') {
+      if (signal?.aborted) return pauseAfterStoppingRunning('signal aborted');
+      const task = taskMap.get(settled.taskId);
+      if (!task) throw new Error(`Missing backlog task for settled outcome ${settled.taskId}`);
+      const decision = decide(readEvents(eventLogPath), task.id);
+      if (decision.kind === 'quota') {
+        quotaPause = {
+          reason: `Quota limit reached while running ${task.id}: ${decision.reason}`,
+          quota: decision.quota,
+        };
+        log.warn(`${quotaPause.reason}; draining ${running.size} already-running task(s) before pause`);
+      } else if (decision.kind === 'retry') {
+        const attempt = (retryAttempts.get(task.id) ?? 0) + 1;
+        retryAttempts.set(task.id, attempt);
+        emitTaskRetry({
           task,
-          ts,
+          ts: new Date().toISOString(),
           dagId,
           layer: layerFor(task.id),
           emit,
-          worktreePath: wt.path,
-          worktreeBranch: wt.branch,
+          attempt,
+          delayMs: decision.delayMs,
+          reason: state.tasks[task.id]?.error ?? 'unknown',
+          previousError: state.tasks[task.id]?.error,
         });
-        return { task, ...wt };
-      }),
-    );
-    saveState(statePath, state);
-
-    const worktreeMap = new Map(worktrees.map((wt) => [wt.task.id, wt]));
-    const worktreeFor = (task: DAGTask): (typeof worktrees)[number] => {
-      const worktree = worktreeMap.get(task.id);
-      if (!worktree) throw new Error(`Missing worktree for backlog task ${task.id}`);
-      return worktree;
-    };
-    const succeeded = new Set<string>();
-    const retryAttempts = new Map<string, number>();
-    let activeTasks = [...ready];
-    let quotaReason: string | undefined;
-    let quota: QuotaLimitMetadata | undefined;
-
-    while (activeTasks.length > 0 && !quotaReason) {
-      const results = await Promise.allSettled(
-        activeTasks.map(async (task) => {
-          const wt = worktreeFor(task);
-          const { usage, trace, failed } = await executeTaskPasses({
-            task,
-            config,
-            state,
-            log,
-            cwd: wt.path,
-            emit,
-            dagId,
-            layerNum: layerFor(task.id),
-            verifyCommands,
-            signal,
-            projectMemory,
-          });
-          if (failed) throw new Error(state.tasks[task.id]?.error ?? 'Pass execution failed');
-          return { taskId: task.id, usage, trace };
-        }),
-      );
-
-      const modified = await Promise.all(
-        results.map(async (result, i) => {
-          if (result.status !== 'fulfilled') return [];
-          return getFilesModified(worktreeFor(activeTasks[i]).path, baseBranch);
-        }),
-      );
-
-      const nextRetry: Array<{ task: DAGTask; delayMs: number }> = [];
-      for (const [i, result] of results.entries()) {
-        const task = activeTasks[i];
-        if (result.status === 'fulfilled') {
-          const ts = new Date().toISOString();
-          const durationMs = durationSinceStart(state.tasks[task.id]?.startedAt, ts);
-          const settle = await settleNoOpGate({
-            task,
-            cwd: worktreeFor(task).path,
-            declaredOutputs: resolveOutputFiles(task),
-            trace: result.value.trace,
-            usage: result.value.usage,
-            state,
-            ts,
-            durationMs,
-            dagId,
-            layer: layerFor(task.id),
-            emit,
-            log,
-          });
-          if (settle.ok) {
-            emitTaskCompleted({
-              task,
-              state,
-              ts,
-              durationMs,
-              dagId,
-              layer: layerFor(task.id),
-              usage: result.value.usage,
-              filesModified: modified[i],
-              emit,
-            });
-            if (result.value.usage) log.taskUsage(task.id, result.value.usage as TaskUsage);
-            succeeded.add(task.id);
-            continue;
-          }
+        if (quotaPause) {
+          log.warn(`Task ${task.id} retry deferred because quota pause is pending`);
+        } else {
+          log.warn(`Task ${task.id} will retry after ${decision.delayMs}ms`);
+          startRetry(task, decision.delayMs);
         }
-
-        const decision = decide(readEvents(eventLogPath), task.id);
-        if (decision.kind === 'quota') {
-          quotaReason = `Quota limit reached while running ${task.id}: ${decision.reason}`;
-          quota = decision.quota;
-          log.warn(quotaReason);
-        } else if (decision.kind === 'retry') {
-          const attempt = (retryAttempts.get(task.id) ?? 0) + 1;
-          retryAttempts.set(task.id, attempt);
-          emitTaskRetry({
-            task,
-            ts: new Date().toISOString(),
-            dagId,
-            layer: layerFor(task.id),
-            emit,
-            attempt,
-            delayMs: decision.delayMs,
-            reason: state.tasks[task.id]?.error ?? 'unknown',
-            previousError: state.tasks[task.id]?.error,
-          });
-          nextRetry.push({ task, delayMs: decision.delayMs });
-        } else if (decision.kind === 'permanent') {
-          log.error(`Task ${task.id} permanently failed (${decision.reason})`);
-        }
-      }
-
-      if (nextRetry.length > 0 && !quotaReason) {
-        await new Promise<void>((resolve) => setTimeout(resolve, Math.max(...nextRetry.map((x) => x.delayMs))));
-        for (const { task } of nextRetry) {
-          const wt = worktreeFor(task);
-          emitTaskStarted({
-            task,
-            ts: new Date().toISOString(),
-            dagId,
-            layer: layerFor(task.id),
-            emit,
-            worktreePath: wt.path,
-            worktreeBranch: wt.branch,
-          });
-        }
-        activeTasks = nextRetry.map((item) => item.task);
+      } else if (decision.kind === 'permanent') {
+        log.error(`Task ${task.id} permanently failed (${decision.reason})`);
       } else {
-        activeTasks = [];
+        throw settled.reason instanceof Error
+          ? settled.reason
+          : new Error(`Unexpected backlog task failure for ${task.id}: ${String(settled.reason)}`);
       }
+      continue;
     }
 
-    saveState(statePath, state);
-    const pausedAfterBatchMerge = await mergeCompleted([...succeeded]);
-    if (pausedAfterBatchMerge) return pausedAfterBatchMerge;
-    if (quotaReason) return pause(`${quotaReason}. Resume with --resume after the limit resets.`, undefined, quota);
+    const outcome = settled.outcome;
+    if (outcome.kind === 'succeeded') {
+      const pausedAfterTaskMerge = await mergeCompleted([outcome.task.id]);
+      if (pausedAfterTaskMerge) return pausedAfterTaskMerge;
+      saveState(statePath, state);
+    } else if (outcome.kind === 'retry') {
+      if (quotaPause) {
+        log.warn(`Task ${outcome.task.id} retry deferred because quota pause is pending`);
+      } else {
+        log.warn(`Task ${outcome.task.id} will retry after ${outcome.delayMs}ms`);
+        startRetry(outcome.task, outcome.delayMs);
+      }
+    } else if (outcome.kind === 'quota') {
+      quotaPause = { reason: outcome.reason, quota: outcome.quota };
+      log.warn(`${outcome.reason}; draining ${running.size} already-running task(s) before pause`);
+    } else if (outcome.kind === 'permanent') {
+      log.error(`Task ${outcome.task.id} permanently failed (${outcome.reason})`);
+    } else {
+      log.warn(`Task ${outcome.task.id} stopped because the backlog run is pausing`);
+    }
   }
 
   state.status = 'completed';

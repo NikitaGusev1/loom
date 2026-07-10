@@ -100,6 +100,68 @@ write_smoke_dag() {
   ' "$dag"
 }
 
+write_lumpy_dag() {
+  local dag="$1"
+  node -e '
+    const fs = require("fs");
+    fs.writeFileSync(process.argv[1], JSON.stringify({
+      meta: {
+        id: "lumpy",
+        source: {
+          type: "description",
+          title: "Lumpy",
+          description: "Lumpy DAG",
+          figmaUrls: [],
+          acceptanceCriteria: []
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+        gitCommit: "abc123",
+        branch: "main",
+        qualityReport: { iterations: 1, checksRun: [], allPassed: true }
+      },
+      tasks: [
+        {
+          id: "fast-parent",
+          name: "fast-parent",
+          description: "",
+          dependencies: [],
+          contracts: { inputs: {}, outputs: {} },
+          context: { files: [] },
+          completionCriteria: { automated: [], manual: [] },
+          estimatedScope: "single-component",
+          weight: "standard"
+        },
+        {
+          id: "slow-unrelated",
+          name: "slow-unrelated",
+          description: "",
+          dependencies: [],
+          contracts: { inputs: {}, outputs: {} },
+          context: { files: [] },
+          completionCriteria: { automated: [], manual: [] },
+          estimatedScope: "single-component",
+          weight: "heavy"
+        },
+        {
+          id: "child",
+          name: "child",
+          description: "",
+          dependencies: ["fast-parent"],
+          contracts: { inputs: {}, outputs: {} },
+          context: { files: [] },
+          completionCriteria: { automated: [], manual: [] },
+          estimatedScope: "single-component",
+          weight: "standard"
+        }
+      ],
+      executionLayers: [
+        { layer: 0, description: "roots", taskIds: ["fast-parent", "slow-unrelated"] },
+        { layer: 1, description: "child", taskIds: ["child"] }
+      ]
+    }, null, 2) + "\n");
+  ' "$dag"
+}
+
 wait_json_value() {
   local file="$1" field="$2" expected="$3"
   local i value
@@ -203,6 +265,7 @@ chmod +x "$CODEX_STUB"
 
 run_case() {
   local name="$1" expected_rc="$2" plan_body="$3"
+  local dag_writer="${4:-write_smoke_dag}"
   local dir="${TMP_DIR}/${name}"
   mkdir -p "$dir"
   local dag="${dir}/dag.json"
@@ -212,7 +275,7 @@ run_case() {
   local ckpt="${dir}/ckpt.json"
   local logs="${dir}/logs"
 
-  write_smoke_dag "$dag"
+  "$dag_writer" "$dag"
   printf '%s\n' "$plan_body" >"$plan"
   : >"$inv"
 
@@ -242,6 +305,8 @@ run_case() {
 run_case completed 0 $'0'
 assert_eq 'completed: status' completed "$(json_get "$CASE_CKPT" status)"
 assert_eq 'completed: attempts' 1 "$(json_get "$CASE_CKPT" attempts)"
+
+run_case lumpy_backlog 0 $'0' write_lumpy_dag
 
 run_case crash_retry 0 $'1\n0'
 assert_eq 'crash_retry: status' completed "$(json_get "$CASE_CKPT" status)"

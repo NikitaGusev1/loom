@@ -119,7 +119,7 @@ Acceptance criteria:
 
 Replace the day-run execution structure with ready-work scheduling instead of strict topological layers.
 
-Status: proposed.
+Status: complete. Backlog mode now uses live ready-work scheduling: successful work is merged and verified as each task finishes, dependencies are recomputed immediately, and newly unblocked work can start while unrelated long-running tasks continue. The classic layered executor remains available by omitting `--backlog`.
 
 Today, even backlog mode still advances in rounds: it finds the currently runnable set, waits for that whole set to finish, merges successful work, verifies, and only then discovers the next ready set. That preserves the old layer barrier shape. It wastes wall-clock when one slow task shares a round with a fast dependency: downstream work that only needed the fast task waits for unrelated slow work to finish first.
 
