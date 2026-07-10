@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { TaskUsage } from './types.js';
+import { USAGE_TOKEN_FIELDS } from './usage.js';
 
 // ---------------------------------------------------------------------------
 // Local message types — replace the SDK's SDKMessage / ModelUsage. The Claude
@@ -90,10 +91,7 @@ export const aggregateModelUsage = (
 ): Pick<TaskUsage, 'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'> => {
   const totals = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
   for (const mu of Object.values(modelUsage)) {
-    totals.inputTokens += mu.inputTokens;
-    totals.outputTokens += mu.outputTokens;
-    totals.cacheReadInputTokens += mu.cacheReadInputTokens;
-    totals.cacheCreationInputTokens += mu.cacheCreationInputTokens;
+    for (const field of USAGE_TOKEN_FIELDS) totals[field] += mu[field];
   }
   return totals;
 };

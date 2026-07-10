@@ -7,6 +7,7 @@
 import type { TaskUsage } from '../types.js';
 import type { VerificationOutcome } from './run.js';
 import { formatFailures } from './run.js';
+import { addUsage } from '../usage.js';
 
 export interface VerifyFixLoopDeps {
   /** Re-invoke the task session (one fix attempt) with the given prompt; returns its usage. */
@@ -37,21 +38,7 @@ export interface VerifyFixLoopResult {
   fixUsage?: TaskUsage;
 }
 
-/** Sum two usage records field-wise; either may be undefined. */
-export const sumUsage = (a: TaskUsage | undefined, b: TaskUsage | undefined): TaskUsage | undefined => {
-  if (!a) return b;
-  if (!b) return a;
-  return {
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    cacheReadInputTokens: a.cacheReadInputTokens + b.cacheReadInputTokens,
-    cacheCreationInputTokens: a.cacheCreationInputTokens + b.cacheCreationInputTokens,
-    costUSD: a.costUSD + b.costUSD,
-    numTurns: a.numTurns + b.numTurns,
-    durationMs: a.durationMs + b.durationMs,
-    durationApiMs: a.durationApiMs + b.durationApiMs,
-  };
-};
+export { addUsage as sumUsage } from '../usage.js';
 
 export const runVerifyFixLoop = async (
   deps: VerifyFixLoopDeps,
@@ -66,7 +53,7 @@ export const runVerifyFixLoop = async (
     attempts += 1;
     const prompt = `${basePrompt}\n\n${fixNotice}\n\n${formatFailures(outcome)}`;
     const { usage } = await deps.runFix(prompt);
-    fixUsage = sumUsage(fixUsage, usage);
+    fixUsage = addUsage(fixUsage, usage);
     changed = await deps.getChangedFiles();
     outcome = await deps.runVerification(changed);
   }

@@ -29,24 +29,13 @@ import { runQuery, TRIVIAL_TOOLS } from './session.js';
 import { autoCommit, getFilesModified } from './git-ops.js';
 import { buildBatchCommitMessage } from './commit-message.js';
 import { settleNoOpGate } from './noop-gate.js';
+import { divideUsage } from '../usage.js';
 
 // Prepended to the batched prompt when re-running tasks that silently no-op'd.
 const TRIVIAL_RETRY_NOTICE =
   'PREVIOUS ATTEMPT FAILED: a prior session reported the tasks below complete but wrote NO files — ' +
   'the declared outputs DO NOT exist yet. You MUST create or modify them via the Write and Edit tools. ' +
   'File content pasted into your reply text writes nothing.\n\n';
-
-// Split a batched session's usage evenly across its tasks.
-const divideUsage = (usage: TaskUsage, divisor: number): TaskUsage => ({
-  inputTokens: Math.ceil(usage.inputTokens / divisor),
-  outputTokens: Math.ceil(usage.outputTokens / divisor),
-  cacheReadInputTokens: Math.ceil(usage.cacheReadInputTokens / divisor),
-  cacheCreationInputTokens: Math.ceil(usage.cacheCreationInputTokens / divisor),
-  costUSD: usage.costUSD / divisor,
-  numTurns: Math.ceil(usage.numTurns / divisor),
-  durationMs: Math.ceil(usage.durationMs / divisor),
-  durationApiMs: Math.ceil(usage.durationApiMs / divisor),
-});
 
 interface ExecuteTrivialBatchArgs {
   tasks: DAGTask[];

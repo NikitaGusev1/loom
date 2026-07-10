@@ -1,4 +1,5 @@
-import type { DAGTask, TaskUsage } from './types.js';
+import type { DAGTask } from './types.js';
+export { ZERO_USAGE } from './usage.js';
 
 export const WEIGHT_MAX_TURNS: Record<DAGTask['weight'], number> = {
   trivial: 50,
@@ -51,14 +52,3 @@ export const WEIGHT_VERIFICATION_TIMEOUT_MS: Record<DAGTask['weight'], number> =
 export const VERIFICATION_MAX_FIX_ATTEMPTS = 2;
 
 export const BACKLOG_PAUSE_ABORT_REASON = 'backlog-pause';
-
-export const ZERO_USAGE: TaskUsage = {
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadInputTokens: 0,
-  cacheCreationInputTokens: 0,
-  costUSD: 0,
-  numTurns: 0,
-  durationMs: 0,
-  durationApiMs: 0,
-};

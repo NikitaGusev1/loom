@@ -16,7 +16,8 @@ import { BACKLOG_PAUSE_ABORT_REASON, WEIGHT_DEADLINE_MS, VERIFICATION_MAX_FIX_AT
 import { durationSinceStart, emitTaskFailed, emitTaskTimeout, emitTaskVerificationFailed } from '../events/emit.js';
 import type { ResolvedCommands } from '../verify/detect.js';
 import { runVerification, formatFailures, firstFailedKind } from '../verify/run.js';
-import { runVerifyFixLoop, sumUsage } from '../verify/fix-loop.js';
+import { runVerifyFixLoop } from '../verify/fix-loop.js';
+import { addUsage } from '../usage.js';
 import { createTaskDeadline } from '../policy/deadline.js';
 import { runQuery } from './session.js';
 import { autoCommit, getUncommittedChanges } from './git-ops.js';
@@ -117,7 +118,7 @@ export const executeTaskPasses = async ({
           layer: layerNum,
           verificationKind: firstFailedKind(loop.outcome.results),
           error: `Verification failed after ${loop.attempts} fix attempt(s).\n${formatFailures(loop.outcome)}`,
-          usage: sumUsage(usage, fixUsage),
+          usage: addUsage(usage, fixUsage),
           emit,
         });
         return { failed: true };
@@ -130,7 +131,7 @@ export const executeTaskPasses = async ({
 
     await autoCommit(cwd, buildTaskCommitMessage(task), log, resolveOutputFiles(task), task.context.files);
 
-    return { usage: sumUsage(usage, fixUsage), trace, failed: false };
+    return { usage: addUsage(usage, fixUsage), trace, failed: false };
   } catch (err) {
     if (isBacklogPauseAbort(signal)) {
       return { failed: true, cancelled: true };

@@ -143,7 +143,7 @@ npm run build && node --test build/usage.test.js
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/usage.ts src/usage.test.ts src
