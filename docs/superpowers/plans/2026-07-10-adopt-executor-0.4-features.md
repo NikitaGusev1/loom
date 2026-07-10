@@ -506,7 +506,7 @@ git commit -m "feat: validate source-routed DAG contracts"
 - Modify: `src/index` related tests if present
 - Modify: `src/self-host-guard.test.ts` only if standalone command ordering affects it
 
-- [ ] **Step 1: Parse positionals separately**
+- [x] **Step 1: Parse positionals separately**
 
 Change CLI parsing so:
 
@@ -523,7 +523,7 @@ Preserve local flags:
 - `--memory`
 - `--no-memory`
 
-- [ ] **Step 2: Add `--metrics` handling**
+- [x] **Step 2: Add `--metrics` handling**
 
 Run before the normal `!dagPath` guard and before execution-only guards.
 
@@ -533,7 +533,7 @@ Expected usage:
 dag-executor --metrics <run.events.jsonl> [more.events.jsonl ...] [--human]
 ```
 
-- [ ] **Step 3: Add `--diff-view` handling**
+- [x] **Step 3: Add `--diff-view` handling**
 
 Run before the normal execution path and before self-host staleness checks.
 
@@ -551,7 +551,7 @@ Implement best-effort opener:
 
 Opening failure must only print the path.
 
-- [ ] **Step 4: Add corpus archiving after execution**
+- [x] **Step 4: Add corpus archiving after execution**
 
 After either `executeDAG` or `executeBacklog` returns, call `archiveRun(config.dagPath, ...)`.
 
@@ -562,7 +562,7 @@ Options:
 
 Catch and warn on errors.
 
-- [ ] **Step 5: Verify standalone CLI paths**
+- [x] **Step 5: Verify standalone CLI paths**
 
 Run:
 
@@ -579,7 +579,9 @@ Expected:
 - first three commands preserve existing behavior
 - `--metrics` without logs exits with usage and code 1
 
-- [ ] **Step 6: Verify with fixture logs**
+Observed: `--dag-readiness scripts/smoke-dag.json` preserves the existing stricter readiness behavior by exiting 1 with readiness findings for the current smoke DAG fixture.
+
+- [x] **Step 6: Verify with fixture logs**
 
 Use existing tests/fixtures or create temporary fixture files under `/tmp`.
 
@@ -595,7 +597,7 @@ Expected:
 - metrics prints a human report
 - diff-view writes `/tmp/<fixture>.diff.html`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/index.ts src

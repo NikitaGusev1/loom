@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ZodError } from 'zod';
 import { validateDAG } from './validation.js';
 import { executeDAG } from './executor.js';
 import { executeBacklog } from './backlog-executor.js';
 import { createLogger } from './logger.js';
-import { toErrorMessage } from './exec.js';
+import { exec, toErrorMessage } from './exec.js';
+import { diffViewFromLog, renderDiffHtml } from './diff-view.js';
 import { WEIGHT_MAX_TURNS } from './types.js';
 import type { ExecutorConfig, DecompositionDAG, ExecutionState } from './types.js';
 import { getEventLogPath, appendEvent } from './events/log.js';
@@ -16,8 +17,10 @@ import { DEFAULT_SLOT_DIR } from './semaphore.js';
 import { MAX_GLOBAL_SLOTS } from './consts.js';
 import { scanSlots, renderSlotsStatus } from './slots-status.js';
 import { decompositionStatsFromFile } from './decomposition-stats.js';
+import { metricsFromFiles, renderMetricsHuman } from './metrics.js';
 import { checkSelfHostStaleness } from './self-host-guard.js';
 import { analyzeDAGReadiness, formatDAGReadinessReport } from './dag-readiness.js';
+import { archiveRun } from './corpus.js';
 
 const log = createLogger();
 
@@ -36,17 +39,42 @@ const CODEX_MODEL_MAP: Record<string, string> = {
 };
 
 const args = process.argv.slice(2);
-const dagPath = args.find((a) => !a.startsWith('--'));
+const positionals = args.filter((a) => !a.startsWith('--'));
+const dagPath = positionals[0];
 const resume = args.includes('--resume');
 const dryRun = args.includes('--dry-run');
 const backlog = args.includes('--backlog');
 const slotsFlag = args.includes('--slots');
 const statsFlag = args.includes('--decomposition-stats');
+const metricsFlag = args.includes('--metrics');
+const diffViewFlag = args.includes('--diff-view');
+const noOpen = args.includes('--no-open');
+const humanFlag = args.includes('--human');
 const readinessFlag = args.includes('--dag-readiness');
 const skipDagReadiness = args.includes('--skip-dag-readiness');
 const allowStaleSelfHost = args.includes('--allow-stale-self-host');
 const getArgValue = (name: string): string | undefined => args.find((a) => a.startsWith(`${name}=`))?.split('=')[1];
 const providerArg = getArgValue('--provider');
+
+const diffHtmlPath = (path: string): string =>
+  path.endsWith('.json') ? path.replace(/\.json$/, '.diff.html') : `${path}.diff.html`;
+
+const openInBrowser = async (file: string): Promise<void> => {
+  const openers: Array<{ cmd: string; args: string[] }> = [
+    { cmd: 'open', args: [file] },
+    { cmd: 'xdg-open', args: [file] },
+    { cmd: 'cmd', args: ['/c', 'start', '', file] },
+  ];
+  for (const opener of openers) {
+    try {
+      await exec(opener.cmd, opener.args);
+      return;
+    } catch {
+      // Try the next platform opener.
+    }
+  }
+  log.info(`Could not launch a browser automatically. Open it manually: ${file}`);
+};
 
 const parseCsvArg = (value: string | undefined): string[] =>
   value
@@ -104,6 +132,42 @@ if (statsFlag) {
   }
 }
 
+if (metricsFlag) {
+  const logPaths = positionals;
+  if (logPaths.length === 0) {
+    log.error('Usage: dag-executor --metrics <run.events.jsonl> [more.events.jsonl ...] [--human]');
+    process.exit(1);
+  }
+  try {
+    const report = metricsFromFiles(logPaths.map((p) => resolve(p)));
+    console.log(humanFlag ? renderMetricsHuman(report) : JSON.stringify(report));
+    process.exit(0);
+  } catch (err) {
+    log.error(`Failed to compute metrics: ${toErrorMessage(err)}`);
+    process.exit(1);
+  }
+}
+
+if (diffViewFlag) {
+  if (!dagPath) {
+    log.error('Usage: dag-executor --diff-view <decomposition.json> [--no-open]');
+    process.exit(1);
+  }
+  try {
+    const resolvedDag = resolve(dagPath);
+    const model = await diffViewFromLog(resolvedDag);
+    const outPath = diffHtmlPath(resolvedDag);
+    writeFileSync(outPath, renderDiffHtml(model), 'utf-8');
+    log.success(`Diff view written: ${outPath}`);
+    if (noOpen) log.info(`Open it in a browser: ${outPath}`);
+    else await openInBrowser(outPath);
+    process.exit(0);
+  } catch (err) {
+    log.error(`Failed to build diff view: ${toErrorMessage(err)}`);
+    process.exit(1);
+  }
+}
+
 // --dag-readiness <path>: standalone, deterministic quality gate for generated
 // decompositions. It catches prompt-enforced "/decompose" rules before an
 // executor run can spend agent time on over-broad or under-specified tasks.
@@ -133,6 +197,7 @@ if (!dagPath) {
     [
       'Usage: dag-executor <decomposition.json>',
       '  [--resume] [--dry-run] [--backlog] [--slots] [--decomposition-stats] [--dag-readiness]',
+      '  [--metrics <log...> [--human]] [--diff-view <dag> [--no-open]]',
       '  [--provider=codex|claude] [--model=codex|default|gpt5|mini|opus|sonnet|haiku|<model>]',
       '  [--rerun=id1,id2]',
       '  [--force-worktree-reset=id1,id2] [--allow-stale-self-host]',
@@ -328,6 +393,16 @@ try {
 } catch (err) {
   log.error(`Unexpected error: ${toErrorMessage(err)}`);
   process.exit(1);
+}
+
+try {
+  const archive = archiveRun(config.dagPath, {
+    disabled: process.env.DAG_EXECUTOR_NO_CORPUS === '1',
+    ...(process.env.DAG_EXECUTOR_CORPUS_DIR && { corpusDir: process.env.DAG_EXECUTOR_CORPUS_DIR }),
+  });
+  if (archive.archived) log.info(`Run banked to corpus: ${archive.destLog}`);
+} catch (err) {
+  log.warn(`Corpus archive skipped: ${toErrorMessage(err)}`);
 }
 
 if (finalState.status === 'completed') {
