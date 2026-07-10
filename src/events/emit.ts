@@ -207,6 +207,8 @@ interface WorktreeMergedArgs {
   baseBranch: string;
   dagId: string;
   ts: string;
+  baseShaBefore?: string;
+  baseShaAfter?: string;
   emit: (event: DagEvent) => void;
 }
 
@@ -216,7 +218,16 @@ interface WorktreeMergedArgs {
  * worktree.created), so the in-run and resume merge paths build an identical
  * payload from one place.
  */
-export const emitWorktreeMerged = ({ taskId, state, baseBranch, dagId, ts, emit }: WorktreeMergedArgs): void => {
+export const emitWorktreeMerged = ({
+  taskId,
+  state,
+  baseBranch,
+  dagId,
+  ts,
+  baseShaBefore,
+  baseShaAfter,
+  emit,
+}: WorktreeMergedArgs): void => {
   const t = state.tasks[taskId];
   emit({
     kind: 'worktree.merged',
@@ -228,5 +239,7 @@ export const emitWorktreeMerged = ({ taskId, state, baseBranch, dagId, ts, emit 
     branch: t?.worktreeBranch ?? '',
     targetBranch: baseBranch,
     filesChanged: t?.filesModified ?? [],
+    ...(baseShaBefore && { baseShaBefore }),
+    ...(baseShaAfter && { baseShaAfter }),
   });
 };

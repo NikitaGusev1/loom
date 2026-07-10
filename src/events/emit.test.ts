@@ -49,4 +49,25 @@ describe('emitWorktreeMerged', () => {
     assert.equal(e.branch, '');
     assert.deepEqual(e.filesChanged, []);
   });
+
+  it('carries optional base SHA range fields when supplied', () => {
+    const state = baseState({
+      a: { status: 'completed', worktreePath: '/wt/a', worktreeBranch: 'dag/a', filesModified: ['src/x.ts'] },
+    });
+    const { events, emit } = capture();
+    emitWorktreeMerged({
+      taskId: 'a',
+      state,
+      baseBranch: 'main',
+      dagId: 'd1',
+      ts: 'T',
+      baseShaBefore: 'before',
+      baseShaAfter: 'after',
+      emit,
+    });
+
+    const e = events[0] as WorktreeMergedEvent;
+    assert.equal(e.baseShaBefore, 'before');
+    assert.equal(e.baseShaAfter, 'after');
+  });
 });

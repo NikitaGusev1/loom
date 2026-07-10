@@ -118,6 +118,22 @@ describe('reduce — dag.started', () => {
     assert.equal(next.status, 'running');
     assert.equal(next.startedAt, ts);
   });
+
+  it('ignores additive baseStartSha for state replay compatibility', () => {
+    const event: DagEvent = {
+      kind: 'dag.started',
+      schemaVersion: V,
+      ts,
+      dagPath: '/test/dag.json',
+      dagId: 'test-dag',
+      branch: 'main',
+      resume: false,
+      baseStartSha: 'abc123',
+    };
+    const next = reduce(init(), event);
+    assert.equal(next.status, 'running');
+    assert.equal(next.startedAt, ts);
+  });
 });
 
 describe('reduce — dag.completed', () => {
@@ -212,6 +228,26 @@ describe('reduce — dag.paused', () => {
       },
     };
     const next = reduce(init(), event);
+    assert.deepEqual(next.quota, event.quota);
+  });
+
+  it('accepts typed pause cause alongside quota metadata', () => {
+    const event: DagEvent = {
+      kind: 'dag.paused',
+      schemaVersion: V,
+      ts,
+      dagPath: '/test/dag.json',
+      dagId: 'test-dag',
+      reason: 'Quota limit reached while running task-a',
+      currentLayer: 0,
+      cause: 'quota',
+      quota: {
+        category: 'daily',
+        reason: 'daily usage limit reached',
+      },
+    };
+    const next = reduce(init(), event);
+    assert.equal(next.status, 'paused');
     assert.deepEqual(next.quota, event.quota);
   });
 });

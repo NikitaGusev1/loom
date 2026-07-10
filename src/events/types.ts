@@ -30,6 +30,8 @@ export interface DagStartedEvent extends EventBase<'dag.started'> {
   dagId: string;
   branch: string;
   resume: boolean;
+  /** Base-branch HEAD at run start, used by diff-view for whole-run diffs. */
+  baseStartSha?: string;
 }
 
 export interface DagCompletedEvent extends EventBase<'dag.completed'> {
@@ -42,11 +44,22 @@ export interface DagCompletedEvent extends EventBase<'dag.completed'> {
   finalState: ExecutionState;
 }
 
+export type DagPauseCause =
+  | 'base-moved'
+  | 'verification-failed'
+  | 'contract-broken'
+  | 'all-tasks-failed'
+  | 'merge-conflict'
+  | 'signal'
+  | 'unexpected-error'
+  | 'quota';
+
 export interface DagPausedEvent extends EventBase<'dag.paused'> {
   dagPath: string;
   dagId: string;
   reason: string;
   currentLayer: number;
+  cause?: DagPauseCause;
   blockedTasks?: BacklogBlockedTask[];
   quota?: QuotaLimitMetadata;
 }
@@ -214,6 +227,10 @@ export interface WorktreeMergedEvent extends EventBase<'worktree.merged'> {
   branch: string;
   targetBranch: string;
   filesChanged: string[];
+  /** Base-branch HEAD immediately before this task landed. */
+  baseShaBefore?: string;
+  /** Base-branch HEAD immediately after this task landed. */
+  baseShaAfter?: string;
 }
 
 // ---------------------------------------------------------------------------
