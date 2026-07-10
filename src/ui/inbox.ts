@@ -1,0 +1,115 @@
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import type { UiInboxFile, UiInboxItem, UiInboxStatus } from './types.js';
+
+export class InboxParseError extends Error {
+  path: string;
+
+  constructor(path: string, cause: unknown) {
+    super(`Failed to parse inbox JSON at ${path}: ${String(cause)}`);
+    this.name = 'InboxParseError';
+    this.path = path;
+    this.cause = cause;
+  }
+}
+
+interface ClockOptions {
+  now?: () => string;
+}
+
+interface CreateInboxOptions extends ClockOptions {
+  id?: () => string;
+}
+
+interface UpdateInboxOptions extends ClockOptions {
+  linkedDagPath?: string | null;
+  linkedTaskId?: string | null;
+}
+
+export const getInboxPath = (projectPath: string): string => join(projectPath, '.dag-executor', 'ui-inbox.json');
+
+const nowIso = (options?: ClockOptions): string => options?.now?.() ?? new Date().toISOString();
+
+const nextId = (options?: CreateInboxOptions): string => options?.id?.() ?? `ui-todo-${randomUUID()}`;
+
+const assertInboxFile = (value: unknown): UiInboxFile => {
+  if (!value || typeof value !== 'object') throw new Error('expected object');
+  const file = value as { schemaVersion?: unknown; items?: unknown };
+  if (file.schemaVersion !== 1) throw new Error('expected schemaVersion 1');
+  if (!Array.isArray(file.items)) throw new Error('expected items array');
+  for (const item of file.items) {
+    if (!item || typeof item !== 'object') throw new Error('expected inbox item object');
+    const candidate = item as Partial<UiInboxItem>;
+    if (typeof candidate.id !== 'string') throw new Error('expected item.id string');
+    if (typeof candidate.body !== 'string') throw new Error('expected item.body string');
+    if (candidate.status !== 'open' && candidate.status !== 'converted' && candidate.status !== 'archived') {
+      throw new Error('expected item.status open, converted, or archived');
+    }
+  }
+  return file as UiInboxFile;
+};
+
+const writeInbox = (path: string, file: UiInboxFile): void => {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(file, null, 2) + '\n', 'utf-8');
+  renameSync(tmp, path);
+};
+
+export const readInbox = (projectPath: string): UiInboxFile => {
+  const path = getInboxPath(projectPath);
+  if (!existsSync(path)) return { schemaVersion: 1, items: [] };
+  try {
+    return assertInboxFile(JSON.parse(readFileSync(path, 'utf-8')));
+  } catch (cause) {
+    throw new InboxParseError(path, cause);
+  }
+};
+
+export const createInboxItem = (projectPath: string, body: string, options?: CreateInboxOptions): UiInboxItem => {
+  const trimmed = body.trim();
+  if (!trimmed) throw new Error('Inbox item body is required');
+
+  const file = readInbox(projectPath);
+  const ts = nowIso(options);
+  const item: UiInboxItem = {
+    id: nextId(options),
+    createdAt: ts,
+    updatedAt: ts,
+    body: trimmed,
+    status: 'open',
+    source: 'ui',
+    linkedDagPath: null,
+    linkedTaskId: null,
+  };
+  writeInbox(getInboxPath(projectPath), { ...file, items: [...file.items, item] });
+  return item;
+};
+
+export const updateInboxItemStatus = (
+  projectPath: string,
+  id: string,
+  status: UiInboxStatus,
+  options?: UpdateInboxOptions,
+): UiInboxItem => {
+  const file = readInbox(projectPath);
+  const existing = file.items.find((item) => item.id === id);
+  if (!existing) throw new Error(`Inbox item "${id}" not found`);
+
+  const updated: UiInboxItem = {
+    ...existing,
+    status,
+    updatedAt: nowIso(options),
+    linkedDagPath: options?.linkedDagPath ?? existing.linkedDagPath,
+    linkedTaskId: options?.linkedTaskId ?? existing.linkedTaskId,
+  };
+  writeInbox(getInboxPath(projectPath), {
+    ...file,
+    items: file.items.map((item) => (item.id === id ? updated : item)),
+  });
+  return updated;
+};
+
+export const archiveInboxItem = (projectPath: string, id: string, options?: ClockOptions): UiInboxItem =>
+  updateInboxItemStatus(projectPath, id, 'archived', options);
