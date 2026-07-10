@@ -220,7 +220,7 @@ git commit -m "feat: add ready-work scheduler helpers"
 - Create: `src/corpus.ts`
 - Create: `src/corpus.test.ts`
 
-- [ ] **Step 1: Port corpus module**
+- [x] **Step 1: Port corpus module**
 
 Adapt upstream `src/corpus.ts`.
 
@@ -233,13 +233,13 @@ Local requirements:
 - Archive logs from both normal and backlog runs.
 - Return skipped reasons instead of throwing for expected no-op cases.
 
-- [ ] **Step 2: Port corpus tests**
+- [x] **Step 2: Port corpus tests**
 
 Adapt upstream `src/corpus.test.ts`.
 
 Add coverage for disabled archive and already-in-corpus no-op if not already present.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 
@@ -249,7 +249,7 @@ npm run build && node --test build/corpus.test.js
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/corpus.ts src/corpus.test.ts
@@ -269,7 +269,7 @@ git commit -m "feat: add run corpus archiving"
 - Modify: `src/state/reducer.test.ts`
 - Modify: `src/types.ts`
 
-- [ ] **Step 1: Extend event types**
+- [x] **Step 1: Extend event types**
 
 Adapt upstream event additions:
 
@@ -289,19 +289,19 @@ Keep local fields:
 - `dag.paused.blockedTasks?`
 - `dag.paused.quota?`
 
-- [ ] **Step 2: Update event emit helpers**
+- [x] **Step 2: Update event emit helpers**
 
 Update `emitWorktreeMerged` or equivalent helper to accept optional base SHA fields.
 
 Do not force every caller to provide them yet.
 
-- [ ] **Step 3: Update reducer compatibility**
+- [x] **Step 3: Update reducer compatibility**
 
 Confirm reducer ignores additive fields unless local state already records quota/blocked data.
 
 Keep existing tests for `blockedTasks` and `quota`.
 
-- [ ] **Step 4: Add tests**
+- [x] **Step 4: Add tests**
 
 Add or adapt tests proving:
 
@@ -310,7 +310,7 @@ Add or adapt tests proving:
 - `worktree.merged` with SHA fields reduces like old `worktree.merged`.
 - `dag.started` with `baseStartSha` reduces like old `dag.started`.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -322,7 +322,7 @@ node --test build/state/reducer.test.js
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/events src/state src/types.ts
