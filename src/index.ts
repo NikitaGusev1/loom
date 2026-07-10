@@ -17,6 +17,7 @@ import { MAX_GLOBAL_SLOTS } from './consts.js';
 import { scanSlots, renderSlotsStatus } from './slots-status.js';
 import { decompositionStatsFromFile } from './decomposition-stats.js';
 import { checkSelfHostStaleness } from './self-host-guard.js';
+import { analyzeDAGReadiness, formatDAGReadinessReport } from './dag-readiness.js';
 
 const log = createLogger();
 
@@ -41,6 +42,8 @@ const dryRun = args.includes('--dry-run');
 const backlog = args.includes('--backlog');
 const slotsFlag = args.includes('--slots');
 const statsFlag = args.includes('--decomposition-stats');
+const readinessFlag = args.includes('--dag-readiness');
+const skipDagReadiness = args.includes('--skip-dag-readiness');
 const allowStaleSelfHost = args.includes('--allow-stale-self-host');
 const getArgValue = (name: string): string | undefined => args.find((a) => a.startsWith(`${name}=`))?.split('=')[1];
 const providerArg = getArgValue('--provider');
@@ -101,16 +104,40 @@ if (statsFlag) {
   }
 }
 
+// --dag-readiness <path>: standalone, deterministic quality gate for generated
+// decompositions. It catches prompt-enforced "/decompose" rules before an
+// executor run can spend agent time on over-broad or under-specified tasks.
+if (readinessFlag) {
+  if (!dagPath) {
+    log.error('Usage: dag-executor --dag-readiness <decomposition.json>');
+    process.exit(1);
+  }
+  try {
+    const checkedDag = validateDAG(JSON.parse(readFileSync(resolve(dagPath), 'utf-8')));
+    const readiness = analyzeDAGReadiness(checkedDag, { cwd: process.cwd() });
+    const report = formatDAGReadinessReport(readiness);
+    if (readiness.ok) {
+      log.success(report);
+      process.exit(0);
+    }
+    log.error(report);
+    process.exit(1);
+  } catch (err) {
+    log.error(`Failed to check DAG readiness: ${toErrorMessage(err)}`);
+    process.exit(1);
+  }
+}
+
 if (!dagPath) {
   log.error(
     [
       'Usage: dag-executor <decomposition.json>',
-      '  [--resume] [--dry-run] [--backlog] [--slots] [--decomposition-stats]',
+      '  [--resume] [--dry-run] [--backlog] [--slots] [--decomposition-stats] [--dag-readiness]',
       '  [--provider=codex|claude] [--model=codex|default|gpt5|mini|opus|sonnet|haiku|<model>]',
       '  [--rerun=id1,id2]',
       '  [--force-worktree-reset=id1,id2] [--allow-stale-self-host]',
       '  [--test-cmd=<cmd>] [--lint-cmd=<cmd>] [--typecheck-cmd=<cmd>] [--no-verify]',
-      '  [--memory=<path>] [--no-memory]',
+      '  [--memory=<path>] [--no-memory] [--skip-dag-readiness]',
     ].join('\n'),
   );
   process.exit(1);
@@ -188,6 +215,16 @@ try {
 
 log.info(`DAG: ${dag.meta.id}`);
 log.info(`Tasks: ${dag.tasks.length} across ${dag.executionLayers.length} layers`);
+
+if (!skipDagReadiness) {
+  const readiness = analyzeDAGReadiness(dag, { cwd: process.cwd() });
+  if (!readiness.ok) {
+    log.error(formatDAGReadinessReport(readiness));
+    log.error('Fix the decomposition or pass --skip-dag-readiness to bypass this gate.');
+    process.exit(1);
+  }
+  log.success('DAG readiness passed.');
+}
 
 if (dryRun) {
   log.info('--- Dry Run ---');

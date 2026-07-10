@@ -38,6 +38,9 @@ interface ExecuteTaskPassesArgs {
   projectMemory?: ProjectMemory | null;
 }
 
+export const isBacklogPauseAbort = (signal: AbortSignal | undefined): boolean =>
+  signal?.aborted === true && signal.reason === BACKLOG_PAUSE_ABORT_REASON;
+
 export const executeTaskPasses = async ({
   task,
   config,
@@ -121,11 +124,15 @@ export const executeTaskPasses = async ({
       }
     }
 
+    if (isBacklogPauseAbort(signal)) {
+      return { failed: true, cancelled: true };
+    }
+
     await autoCommit(cwd, buildTaskCommitMessage(task), log, resolveOutputFiles(task), task.context.files);
 
     return { usage: sumUsage(usage, fixUsage), trace, failed: false };
   } catch (err) {
-    if (signal?.aborted && signal.reason === BACKLOG_PAUSE_ABORT_REASON) {
+    if (isBacklogPauseAbort(signal)) {
       return { failed: true, cancelled: true };
     }
 

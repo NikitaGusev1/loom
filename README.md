@@ -320,6 +320,8 @@ dag-executor <decomposition.json> [flags]
 | `--dry-run`                      | false                      | Print estimated task costs and exit without executing                                            |
 | `--backlog`                      | false                      | Run dependency-ready tasks from the DAG as a persistent backlog instead of strict layer barriers |
 | `--slots`                        | false                      | Print machine-wide slot snapshot and exit (no DAG argument needed)                               |
+| `--dag-readiness`                | false                      | Check decomposition quality and exit without executing                                           |
+| `--skip-dag-readiness`           | false                      | Bypass the default decomposition quality gate before execution                                   |
 | `--model=opus\|sonnet\|haiku`    | sonnet                     | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
 | `--rerun=id1,id2`                | —                          | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
 | `--force-worktree-reset=id1,id2` | —                          | Allow clobbering unmerged branches for the listed task IDs                                       |
@@ -329,6 +331,16 @@ dag-executor <decomposition.json> [flags]
 | `--no-verify`                    | false                      | Disable both verification tiers entirely                                                         |
 | `--memory=<path>`                | `.dag-executor/memory.md`  | Use a specific curated project memory file for task prompts                                      |
 | `--no-memory`                    | false                      | Disable curated project memory prompt injection                                                  |
+
+### DAG readiness gate
+
+Before execution, the CLI rejects decompositions that violate the prompt-level `/decompose` quality rules: oversized tasks, cross-module scopes, missing or mismatched contracts, missing context files, behavioral outputs without automated checks, and uncovered acceptance criteria. Run the gate directly with:
+
+```sh
+dag-executor --dag-readiness path/to/decomposition.json
+```
+
+Use `--skip-dag-readiness` only when intentionally running a legacy or hand-authored DAG that does not satisfy the stricter agent-sized-task checks.
 
 ### Verification gates
 
