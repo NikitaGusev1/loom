@@ -388,7 +388,7 @@ git commit -m "feat: add event log metrics"
 - Create: `src/diff-view.ts`
 - Create: `src/diff-view.test.ts`
 
-- [ ] **Step 1: Port diff-view module**
+- [x] **Step 1: Port diff-view module**
 
 Adapt upstream `src/diff-view.ts`.
 
@@ -401,13 +401,13 @@ Local requirements:
 - Degrade to file lists on missing SHAs or git failure.
 - Keep the rendered HTML self-contained with no new dependency.
 
-- [ ] **Step 2: Port diff-view tests**
+- [x] **Step 2: Port diff-view tests**
 
 Adapt upstream `src/diff-view.test.ts`.
 
 Tests should stub git diff and must not open a browser.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 
@@ -417,7 +417,7 @@ npm run build && node --test build/diff-view.test.js
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/diff-view.ts src/diff-view.test.ts
