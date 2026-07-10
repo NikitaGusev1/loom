@@ -161,7 +161,7 @@ git commit -m "refactor: centralize task usage arithmetic"
 - Create: `src/scheduler/writer-lane.ts`
 - Create: `src/scheduler/writer-lane.test.ts`
 
-- [ ] **Step 1: Port pure ready scheduler**
+- [x] **Step 1: Port pure ready scheduler**
 
 Adapt upstream `src/scheduler/ready.ts`.
 
@@ -172,13 +172,13 @@ Local requirements:
 - deps-complete failed tasks are surfaced as retry candidates, not added directly to ready.
 - Duplicate dependency entries are deduped.
 
-- [ ] **Step 2: Port ready scheduler tests**
+- [x] **Step 2: Port ready scheduler tests**
 
 Adapt upstream `src/scheduler/ready.test.ts`.
 
 Add local coverage for any local `TaskStatus` or state fields touched by quota/backlog additions only if necessary.
 
-- [ ] **Step 3: Port writer lane**
+- [x] **Step 3: Port writer lane**
 
 Adapt upstream `src/scheduler/writer-lane.ts`.
 
@@ -188,11 +188,11 @@ Local requirements:
 - `landWorktree` must return `merged`, `base-moved`, or `conflict`.
 - It must read the post-merge base HEAD after successful merge.
 
-- [ ] **Step 4: Port writer lane tests**
+- [x] **Step 4: Port writer lane tests**
 
 Adapt upstream `src/scheduler/writer-lane.test.ts`.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -204,7 +204,7 @@ node --test build/scheduler/writer-lane.test.js
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/scheduler
