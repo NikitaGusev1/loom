@@ -16,6 +16,8 @@ The entry point parses positional and keyword arguments:
 | `--resume`                       | Re-enter from last saved layer                       |
 | `--rerun=id1,id2`                | Reset specific tasks to pending and re-execute       |
 | `--dry-run`                      | Print layer/task plan with cost estimates, then exit |
+| `--dag-readiness`                | Validate decomposition quality and exit              |
+| `--skip-dag-readiness`           | Bypass the pre-execution decomposition quality gate   |
 | `--model=opus\|sonnet\|haiku`    | Override default + heavy model                       |
 | `--force-worktree-reset=id1,id2` | Force-recreate worktrees for listed tasks            |
 | `--slots`                        | Print machine-wide slot snapshot and exit            |
