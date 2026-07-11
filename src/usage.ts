@@ -25,7 +25,9 @@ export const USAGE_TOKEN_FIELDS = [
   'cacheCreationInputTokens',
 ] as const satisfies readonly (keyof TaskUsage)[];
 
-export const ZERO_USAGE: TaskUsage = Object.fromEntries(USAGE_FIELDS.map((field) => [field, 0])) as unknown as TaskUsage;
+export const ZERO_USAGE: TaskUsage = Object.fromEntries(
+  USAGE_FIELDS.map((field) => [field, 0]),
+) as unknown as TaskUsage;
 
 export const addUsage = (a: TaskUsage | undefined, b: TaskUsage | undefined): TaskUsage | undefined => {
   if (!a) return b;

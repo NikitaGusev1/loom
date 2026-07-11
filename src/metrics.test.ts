@@ -206,7 +206,10 @@ describe('computeRunMetrics', () => {
   });
 
   it('reconstructs old pause causes from preceding events', () => {
-    assert.equal(computeRunMetrics([e.dagStarted(at(0)), e.dagBaseMoved(at(1)), e.dagPaused(at(2))]).pauseCause, 'base-moved');
+    assert.equal(
+      computeRunMetrics([e.dagStarted(at(0)), e.dagBaseMoved(at(1)), e.dagPaused(at(2))]).pauseCause,
+      'base-moved',
+    );
     assert.equal(
       computeRunMetrics([e.dagStarted(at(0)), e.layerVerificationFailed(at(1)), e.dagPaused(at(2))]).pauseCause,
       'verification-failed',

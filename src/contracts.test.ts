@@ -151,7 +151,11 @@ describe('verifyLayerContracts', () => {
     const unrelated = dagTask('unrelated', [], {}, { out: { kind: 'behavioral', description: 'wrong source' } });
     const consumer = dagTask('consumer', ['source'], { out: { source: 'source' } }, {});
 
-    const result = await verifyLayerContracts(['source', 'unrelated'], ['consumer'], dag([source, unrelated, consumer]));
+    const result = await verifyLayerContracts(
+      ['source', 'unrelated'],
+      ['consumer'],
+      dag([source, unrelated, consumer]),
+    );
 
     assert.equal(result.passed, false);
     assert.match(result.brokenContracts[0].reason, /does not produce output "out"/);
