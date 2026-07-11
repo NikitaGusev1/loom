@@ -17,6 +17,8 @@ import type {
 import { validateDAG } from '../validation.js';
 import type { UiBacklogGroups, UiDagDetail, UiDagStatus, UiError, UiTaskDetail, UiTaskSummary } from './types.js';
 
+const RECENT_EVENT_LIMIT = 50;
+
 const toMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 const displayConfig = (dagPath: string): ExecutorConfig => ({
@@ -200,12 +202,12 @@ const buildBacklog = (
       backlog.done.push(summary);
     } else if (taskState.status === 'in-progress') {
       backlog.running.push(summary);
-    } else if (taskState.status === 'failed') {
-      backlog.failed.push(summary);
     } else if (blockedByTaskId.has(task.id)) {
       backlog.blocked.push(taskSummary(task, state, layers, blockedByTaskId, 'blocked'));
     } else if (readyTaskIds.has(task.id)) {
       backlog.ready.push(summary);
+    } else if (taskState.status === 'failed') {
+      backlog.failed.push(summary);
     } else {
       backlog.pending.push(summary);
     }
@@ -230,14 +232,19 @@ const progressFor = (dag: DecompositionDAG, state: ExecutionState | null): UiDag
   };
 };
 
-const statusFor = (state: ExecutionState | null, errors: UiError[]): UiDagStatus => {
-  if (errors.some((error) => error.scope === 'dag')) return 'invalid';
-  return state?.status ?? 'not-started';
-};
+const statusFor = (state: ExecutionState | null): UiDagStatus => state?.status ?? 'not-started';
+
+const recentEventsFor = (events: DagEvent[]): DagEvent[] => events.slice(-RECENT_EVENT_LIMIT).reverse();
 
 const hasTaskId = (event: DagEvent): event is DagEvent & { taskId: string } => 'taskId' in event;
 
-export const loadDagDetail = (projectPath: string, dagPath: string): UiDagDetail => {
+interface DagProjection {
+  detail: UiDagDetail;
+  events: DagEvent[];
+  projectionState: ExecutionState;
+}
+
+const loadDagProjection = (projectPath: string, dagPath: string): DagProjection => {
   const errors: UiError[] = [];
   const dag = loadDag(dagPath);
   const eventLogPath = getEventLogPath(dagPath);
@@ -247,27 +254,33 @@ export const loadDagDetail = (projectPath: string, dagPath: string): UiDagDetail
   const { backlog, blockedTasks } = buildBacklog(dag, projectionState, events);
 
   return {
-    dag,
-    dagPath,
-    relativePath: relative(projectPath, dagPath).split(sep).join('/'),
-    state,
-    status: statusFor(state, errors),
-    progress: progressFor(dag, state),
-    backlog,
-    blockedTasks,
-    recentEvents: events.slice().reverse(),
-    errors,
+    detail: {
+      dag,
+      dagPath,
+      relativePath: relative(projectPath, dagPath).split(sep).join('/'),
+      state,
+      status: statusFor(state),
+      progress: progressFor(dag, state),
+      backlog,
+      blockedTasks,
+      recentEvents: recentEventsFor(events),
+      errors,
+    },
+    events,
+    projectionState,
   };
 };
 
+export const loadDagDetail = (projectPath: string, dagPath: string): UiDagDetail =>
+  loadDagProjection(projectPath, dagPath).detail;
+
 export const loadTaskDetail = (projectPath: string, dagPath: string, taskId: string): UiTaskDetail => {
-  const detail = loadDagDetail(projectPath, dagPath);
+  const { detail, events, projectionState } = loadDagProjection(projectPath, dagPath);
   const task = detail.dag.tasks.find((candidate) => candidate.id === taskId);
   if (!task) throw new Error(`Unknown task "${taskId}"`);
 
-  const projectionState = detail.state ?? pendingProjectionState(detail.dag, dagPath);
   const layers = layerByTask(detail.dag);
-  const { blockedByTaskId } = blockedTasksFor(detail.dag, projectionState, detail.recentEvents.slice().reverse());
+  const { blockedByTaskId } = blockedTasksFor(detail.dag, projectionState, events);
   const taskState = projectionState.tasks[taskId];
 
   return {
@@ -279,6 +292,6 @@ export const loadTaskDetail = (projectPath: string, dagPath: string, taskId: str
     filesModified: taskState?.filesModified ?? [],
     usage: taskState?.usage,
     error: taskState?.error ?? null,
-    events: detail.recentEvents.filter((event) => hasTaskId(event) && event.taskId === taskId),
+    events: events.filter((event) => hasTaskId(event) && event.taskId === taskId).reverse(),
   };
 };

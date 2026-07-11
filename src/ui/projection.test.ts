@@ -162,6 +162,79 @@ describe('loadDagDetail', () => {
       true,
     );
   });
+
+  it('groups retryable failed tasks as ready instead of failed', () => {
+    writeFileSync(
+      join(projectDir, 'work.events.jsonl'),
+      [
+        event({
+          kind: 'task.completed',
+          schemaVersion: 1,
+          ts: '2026-07-10T00:01:00.000Z',
+          dagId: 'work',
+          taskId: 'task-a',
+          taskName: 'Task A',
+          layer: 0,
+          durationMs: 60_000,
+          usage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            costUSD: 0.01,
+            numTurns: 1,
+            durationMs: 60_000,
+            durationApiMs: 50_000,
+          },
+          filesModified: ['src/a.ts'],
+          finalState: { status: 'completed' },
+        }),
+        event({
+          kind: 'task.failed',
+          schemaVersion: 1,
+          ts: '2026-07-10T00:02:00.000Z',
+          dagId: 'work',
+          taskId: 'task-b',
+          taskName: 'Task B',
+          layer: 1,
+          error: 'ECONNRESET: socket hang up',
+          durationMs: 30_000,
+          finalState: { status: 'failed' },
+        }),
+      ].join(''),
+    );
+
+    const detail = loadDagDetail(projectDir, dagPath);
+
+    assert.deepEqual(
+      detail.backlog.ready.map((task) => task.id),
+      ['task-b'],
+    );
+    assert.deepEqual(
+      detail.backlog.failed.map((task) => task.id),
+      [],
+    );
+  });
+
+  it('limits recent events to the newest 50 events', () => {
+    const events = Array.from({ length: 55 }, (_, index) =>
+      event({
+        kind: 'dag.started',
+        schemaVersion: 1,
+        ts: `2026-07-10T00:${String(index).padStart(2, '0')}:00.000Z`,
+        dagPath,
+        dagId: 'work',
+        branch: 'main',
+        resume: false,
+      }),
+    );
+    writeFileSync(join(projectDir, 'work.events.jsonl'), events.join(''));
+
+    const detail = loadDagDetail(projectDir, dagPath);
+
+    assert.equal(detail.recentEvents.length, 50);
+    assert.equal(detail.recentEvents[0].ts, '2026-07-10T00:54:00.000Z');
+  });
 });
 
 describe('loadTaskDetail', () => {
