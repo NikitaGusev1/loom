@@ -70,7 +70,6 @@ Defaults by phase role:
 | `figma-verified` | mechanical | `claude-sonnet-4-6` |
 | `cleaned`        | mechanical | `claude-sonnet-4-6` |
 | `simplified`     | judgment   | `claude-opus-4-8`   |
-| `triage-review`  | judgment   | `claude-opus-4-8`   |
 | `evaluate-review`| judgment   | `claude-opus-4-8`   |
 | `fix-issues`     | mechanical | `claude-sonnet-4-6` |
 | `default`        | fallback   | `claude-sonnet-4-6` |
@@ -78,7 +77,7 @@ Defaults by phase role:
 The `mode-selected` key is the **dag-executor worker `--model`** for Phase 3 (Implement). The supervisor resolves `models["mode-selected"] || models.default` and passes it as `--model=` to the dag-executor CLI. It is not a `claude -p` orchestration session — it controls the worker agents that run task implementations inside worktrees.
 
 Apply user overrides from `--models`:
-- `judgment=<alias>` replaces the model for all judgment-role phases (`validate-plan`, `simplified`, `triage-review`, `evaluate-review`)
+- `judgment=<alias>` replaces the model for all judgment-role phases (`validate-plan`, `simplified`, `evaluate-review`)
 - `mechanical=<alias>` replaces the model for all mechanical-role phases (`mode-selection`, `reviewing`, `figma-verified`, `cleaned`, `fix-issues`), the implement worker (`mode-selected`), and `default`
 
 Accepted aliases: `opus`, `sonnet`, `haiku`, or a full model ID (e.g. `claude-opus-4-8`). These are passed through verbatim to `claude --model`.
@@ -124,7 +123,6 @@ Initial JSON object (substitute real values before calling):
     "figma-verified": "<mechanical-model>",
     "cleaned": "<mechanical-model>",
     "simplified": "<judgment-model>",
-    "triage-review": "<judgment-model>",
     "evaluate-review": "<judgment-model>",
     "fix-issues": "<mechanical-model>",
     "default": "<mechanical-model>"

@@ -12,7 +12,7 @@ disable-model-invocation: true
 - **Supervised (default)** — this chat is only a launcher + gate monitor; its context stays ≥70% free by design, so **sonnet** is sufficient. The real per-phase models come from the supervisor's map (judgment=opus, mechanical=sonnet).
 - **`--inline`** — the monolithic engine threads plan state, verdicts, and ten phases through one long context; run it on **Opus 4.8** for the larger window and sharper gate judgement.
 
-If unsure which path you'll take, `/model opus` is the safe default. Heavy subagents (`code-reviewer`, `plan-reviewer`) pin Opus 4.8 themselves regardless.
+If unsure which path you'll take, `/model opus` is the safe default. Heavy judgment subagents (`plan-reviewer`, `review-finder`, `review-verifier`) pin Opus 4.8 themselves regardless.
 
 You are the entry point for the implementation pipeline. **By default you launch the supervised flow** (checkpoint + background supervisor, one phase per fresh context) and then monitor it. On `--inline` you instead run the whole pipeline in this session: orchestrate `/implement-plan` (which includes a `/code-review` step) and manage the review-fix-retry loop with configurable human oversight.
 
@@ -60,7 +60,7 @@ In autonomous mode, the orchestrator logs each decision and its reasoning so the
 
 ## Dependency Availability (Hybrid plugin model — read first)
 
-This plugin ships the **execute + judge** half of the pipeline: the `plan-reviewer`, `code-reviewer`, and `review-triager` agents, the `/cleanup`, `/code-review`, and `/triage-review` skills, the `task-decomposer` agent, and `/decompose` / `/implement-dag`. Some phases below reference agents/skills the plugin **does not** ship — they are either frontend-only or left to the consumer project. Each such phase is **availability-gated**: if the referenced agent/skill is not installed in the current project, **skip that phase and log the skip** (one line: `Phase N skipped — <agent/skill> not available in this project`), then continue. A missing optional dependency is never a hard error.
+This plugin ships the **execute + judge** half of the pipeline: the `plan-reviewer`, `review-finder`, `review-verifier`, and `task-decomposer` agents; the `/cleanup` and `/code-review` skills; and `/decompose` / `/implement-dag`. Some phases below reference agents/skills the plugin **does not** ship — they are either frontend-only or left to the consumer project. Each such phase is **availability-gated**: if the referenced agent/skill is not installed in the current project, **skip that phase and log the skip** (one line: `Phase N skipped — <agent/skill> not available in this project`), then continue. A missing optional dependency is never a hard error.
 
 | Dependency | Used by | If absent |
 |---|---|---|
@@ -70,7 +70,7 @@ This plugin ships the **execute + judge** half of the pipeline: the `plan-review
 | `code-simplifier` | Phase 6 | Skip + log. (Ships as a separate marketplace plugin — usually present.) |
 | `/enhance-plan`, `/handoff`, `/create-pr` | Phases 8–10 escalation/terminal | If absent, surface the equivalent message inline (describe the plan issue / handoff / PR steps in the response) instead of dispatching the skill. |
 
-The plugin-owned agents (`plan-reviewer`, `code-reviewer`, `review-triager`) and skills (`/code-review`, `/triage-review`) are always available when this plugin is enabled — Phases 1, 3 (review), 7, 8 do not gate on them.
+The plugin-owned agents (`plan-reviewer`, `review-finder`, `review-verifier`) and skill (`/code-review`) are always available when this plugin is enabled — Phases 1, 3 (review), 7, 8 do not gate on them.
 
 ## Execution Substrate (decide this FIRST, before Phase 1)
 
@@ -180,13 +180,13 @@ Rationale: direct sequential bias is real on borderline jobs. Math beats vibes �
 
 > **Now plugin-shipped**: the sequential path uses `dag-executor:implement-plan`, which **ships with this plugin** — it is no longer consumer-supplied, so the sequential path is always available. (Fallback, only if a project deliberately shadows/removes it: promote to the DAG path — if the plan has a `decomposition_path`, run `/implement-dag` on it; else run `/decompose --plan <plan-path>` first, then `/implement-dag`. Tell the user. Halt only if neither path is possible.)
 
-2. Run `/implement-plan` with the plan path **plus `--orchestrated`** (and `--verify-simulator` if specified). The `--orchestrated` flag is required: it suppresses `/implement-plan`'s own self-contained finalize chain (simplify / triage / fix-loop) so those are not double-run — this orchestrator owns simplify (Phase 6), triage (Phase 7), and the fix loop (Phase 9). It leaves only the final `/code-review` step intact.
+2. Run `/implement-plan` with the plan path **plus `--orchestrated`** (and `--verify-simulator` if specified). The `--orchestrated` flag is required: it suppresses `/implement-plan`'s own self-contained finalize chain (simplify / fix-loop) so those are not double-run — this orchestrator owns simplify (Phase 6) and the fix loop (Phase 9). It leaves only the final `/code-review` step intact.
 3. The implement-plan skill handles:
    - Phase-by-phase implementation
    - Test execution via test-runner agent
    - Linting and formatting of changed files
    - Checkbox updates in the plan
-   - **Final `/code-review` step** (produces `.claude/ai/review-*.md` consumed by Phases 7 and 8). Under `--orchestrated`, `/implement-plan` stops after this step — it does **not** simplify, triage, or fix-loop.
+   - **Final `/code-review` step** (produces a pre-adjudicated `.claude/ai/review-*.md` consumed by Phases 7 and 8). Under `--orchestrated`, `/implement-plan` stops after this step — it does **not** simplify or fix-loop.
 
 **On completion (DAG path only)**: `/implement-dag` exits without running `/code-review` — the executor only runs tasks. Run `/code-review` here to produce the `.claude/ai/review-*.md` that Phases 7 and 8 read. Skip this step on the sequential path; `/implement-plan` already produced the review. Then proceed to Phase 4.
 
@@ -194,7 +194,7 @@ Rationale: direct sequential bias is real on borderline jobs. Math beats vibes �
 
 > **Availability gate (frontend-only)**: this phase needs the `figma-differ` agent + figma-console MCP, neither shipped by this plugin. If `figma-differ` is not available in the project, skip the entire phase: write the aggregate summary (step 6) with the phase-status marker `"no decomposition_path in plan frontmatter — figma diff phase skipped"` (or, when there is a decomposition but no figma-differ, the closest applicable skip marker) and proceed to Phase 5. Do not pause. For non-UI repos (no `.tsx`+`style.ts` components) this phase is a no-op regardless.
 
-Run `figma-differ` against each modified component to surface drift between the implemented code and the Figma source of truth. Findings flow into Phase 8's `code-reviewer` automatically (it auto-discovers diff reports in `.claude/ai/`) — no new verdict fields, no auto-fix loop. Diffs are advisory.
+Run `figma-differ` against each modified component to surface drift between the implemented code and the Figma source of truth. Findings flow into the `/code-review` fan-out automatically (it auto-discovers diff reports in `.claude/ai/`) — no new verdict fields, no auto-fix loop. Diffs are advisory.
 
 This phase runs **post-merge**, after `/implement-plan` (or `--dag` execution) has completed. It is single-pass — never per-task inside worktrees.
 
@@ -219,7 +219,7 @@ This phase runs **post-merge**, after `/implement-plan` (or `--dag` execution) h
 
      Options:
      1. Reconnect Figma MCP (open the file with the Console plugin running) and resume
-     2. Skip the diff phase explicitly — code-reviewer will not have Figma diff context
+     2. Skip the diff phase explicitly — `/code-review` will not have Figma diff context
      3. Abort
      ```
 
@@ -236,16 +236,16 @@ This phase runs **post-merge**, after `/implement-plan` (or `--dag` execution) h
 
 6. **Write the aggregate summary**:
    - Always write `.claude/ai/figma-diff-summary-YYYY-MM-DD-{plan-slug}.md`, even when the diff phase was skipped. The plan slug is the plan filename minus the `plan-YYYY-MM-DD-` prefix and `.md` suffix.
-   - The summary MUST include exactly one **phase-status marker** as a top-level line (one of these verbatim strings — `code-reviewer` greps for them in Phase 8 to detect skip vs. run state):
+   - The summary MUST include exactly one **phase-status marker** as a top-level line (one of these verbatim strings — `/code-review` greps for them in Phase 8 to detect skip vs. run state):
      - `"figma diff phase ran"` — at least one component was diffed
      - `"no components had figmaRef — nothing to diff"` — the working list was empty after step 2 resolved tasks
      - `"no decomposition_path in plan frontmatter — figma diff phase skipped"` — step 2 short-circuited because the plan has no decomposition reference
      - `"figma MCP disconnected — figma diff phase skipped explicitly"` — step 3 option 2 was chosen at the MCP-disconnected prompt
    - Beyond the marker, list components diffed (with paths to per-component reports), components skipped per-component (with reason: `"no figmaRef in originating task"` or `"no figmaRef.url — cannot construct Figma URL"`), and any aggregate observations.
 
-7. **Proceed to Phase 5**. Findings will be picked up automatically by `code-reviewer` in Phase 8 — it scans `.claude/ai/` for `figma-diff-*.md` and `figma-diff-summary-*.md` files newer than the prior review (or branch base if no prior review) and folds findings into its existing CRITICAL/WARNING/SUGGESTION classification.
+7. **Proceed to Phase 5**. Findings will be picked up automatically by `/code-review` in Phase 8 — it scans `.claude/ai/` for `figma-diff-*.md` and `figma-diff-summary-*.md` files newer than the prior review (or branch base if no prior review) and folds findings into its existing CRITICAL/WARNING/SUGGESTION classification.
 
-**Mode behavior**: Identical in human and autonomous modes — the only pause point is the MCP-disconnected prompt in step 3. There is no verdict-shaped sub-flow; the diff is advisory and `code-reviewer` makes the final call.
+**Mode behavior**: Identical in human and autonomous modes — the only pause point is the MCP-disconnected prompt in step 3. There is no verdict-shaped sub-flow; the diff is advisory and `/code-review` makes the final call.
 
 ### Phase 5: Cleanup
 
@@ -305,22 +305,19 @@ The simplification pass is distinct from cleanup (which fixes mechanical lint/ty
 - **Human mode**: Show a summary of what the simplifier changed before proceeding
 - **Autonomous mode**: Proceed automatically if tests pass; revert and log if they don't
 
-**On completion**: Proceed to Phase 7 (Triage Review).
+**On completion**: Proceed to Phase 7 (Review Contract Validation).
 
-### Phase 7: Triage Review
+### Phase 7: Review Contract Validation
 
-Run a fresh-context judgment pass on the CRITICAL and WARNING findings produced by `/code-review` (run inside `/implement-plan` on the sequential path, or run explicitly at the end of Phase 3 on the DAG path). The reviewer and the triager disagree by design: the reviewer flags everything that *might* matter; the triager — running in a separate session with no context from the original review — judges each finding as one of `confirmed | deferred | rejected`. This gates Phase 9's fix loop so retries only chase real issues, not the same-context confirmation bias of the reviewer's own re-read.
+Validate the pre-adjudicated review produced by `/code-review` (run inside `/implement-plan` on the sequential path, or run explicitly at the end of Phase 3 on the DAG path). The review fan-out has already spawned `review-finder` agents, verified CRITICAL/WARNING findings with `review-verifier`, tagged each finding as `confirmed | deferred | rejected`, and recomputed counts before writing the report. Phase 7 is now a fail-loud contract gate, not a second triage pass.
 
-The triager **also** tags `deferred` CRITICAL/WARNING blocks and SUGGESTIONS with `**Backlog:** yes | no` per a strict allow-list (perf / memory / a11y / non-blocking security / dep risk / cross-cutting arch / test-coverage-gap / observability / correctness-deferred). `correctness-deferred` is the catch for real latent bugs the reviewer deferred because nothing triggers them under the current call-graph (e.g. state not reset on prop identity change, dormant until a second consumer reuses the instance) — `deferred` CRITICAL/WARNING only, never SUGGESTIONS. `backlog_count` lands in frontmatter for later Jira-extraction tooling. This adds zero new compute (same agent pass) and does not affect verdict routing in Phase 8 — backlog tagging is informational only.
+The review pipeline also tags `deferred` CRITICAL/WARNING blocks and SUGGESTIONS with `**Backlog:** yes | no` per a strict allow-list (perf / memory / a11y / non-blocking security / dep risk / cross-cutting arch / test-coverage-gap / observability / correctness-deferred). `correctness-deferred` is the catch for real latent bugs the reviewer deferred because nothing triggers them under the current call-graph (e.g. state not reset on prop identity change, dormant until a second consumer reuses the instance) — `deferred` CRITICAL/WARNING only, never SUGGESTIONS. `backlog_count` lands in frontmatter for later Jira-extraction tooling. This does not affect verdict routing in Phase 8 — backlog tagging is informational only.
 
-This phase always runs after Phase 6 and before Phase 8 — even in autonomous mode. There is no opt-out: the only short-circuit is the skip-on-zero path, which leaves the review file untouched.
+This phase always runs after Phase 6 and before Phase 8 — even in autonomous mode. There is no opt-out and no skip-on-zero path; `/code-review` always emits `triaged: true`, even when there are zero CRITICAL/WARNING findings.
 
 1. Find the most recent `.claude/ai/review-*.md` file (same lookup Phase 8 uses to find the report — Phase 7 runs before Phase 8 so it precedes Phase 8's modification check).
-2. Read the YAML frontmatter; parse `critical_count` and `warning_count` as integers.
-3. **Skip path** — if `critical_count + warning_count == 0`, log `No CRITICAL or WARNING findings — skipping triage` and proceed directly to Phase 8. The review file is byte-identical after this step. Do NOT set `triaged: true` (Phase 8's back-compat branch handles missing `triaged` correctly).
-4. **Dispatch path** — otherwise, run `/triage-review <review-path>` and wait for completion. The skill spawns the `review-triager` agent which edits the review file in place per its system prompt.
-5. **Post-run validation (fail-loud)** — halt the pipeline with a clear error if any of the following are true after the dispatch path completes:
-   - The triager agent crashed or exited non-zero.
+2. Read the YAML frontmatter and validate it against `references/review-contract.md`.
+3. **Fail-loud validation** — halt the pipeline with a clear error if any of the following are true:
    - Frontmatter is missing `triaged: true` after the run.
    - Frontmatter is missing `triaged_at` after the run.
    - Frontmatter is missing `backlog_count` after the run, OR it is negative / non-integer.
@@ -330,11 +327,11 @@ This phase always runs after Phase 6 and before Phase 8 — even in autonomous m
    - Any SUGGESTION block lacks a `**Backlog:**` line OR a `**BacklogReason:**` line (when the SUGGESTIONS section is non-empty).
    - Any `**Backlog:**` value is not in `{yes, no}`.
    - `backlog_count` ≠ actual count of `**Backlog:** yes` lines across CRITICAL/WARNING/SUGGESTIONS sections.
-   - Post-triage `critical_count > raw_critical_count` (or post-triage `warning_count > raw_warning_count`) — counts can only shrink or stay equal across the triage run.
-   - Post-triage `critical_count` or `warning_count` is negative or non-integer.
-6. On halt, print which validation failed and — when applicable — the specific finding (file:line of the finding's `### C<n>` / `### W<n>` / `### S<n>` or `### CRITICAL <n>` / `### WARNING <n>` / `### SUGGESTION <n>` heading — both formats supported per the triager spec). Do NOT enter Phase 8 in any failure case; the operator must repair the review by hand, then re-run.
+   - Confirmed `critical_count > raw_critical_count` (or confirmed `warning_count > raw_warning_count`) — counts can only shrink or stay equal across review verification.
+   - Confirmed `critical_count` or `warning_count` is negative or non-integer.
+4. On halt, print which validation failed and — when applicable — the specific finding (file:line of the finding's `### C<n>` / `### W<n>` / `### S<n>` or `### CRITICAL <n>` / `### WARNING <n>` / `### SUGGESTION <n>` heading — both formats supported per the review contract). Do NOT enter Phase 8 in any failure case; the operator must repair the review by hand, then re-run.
 
-**Mode behavior**: identical in human and autonomous modes. There is no pause and no override on the validation checks — a malformed triage output is a hard fault.
+**Mode behavior**: identical in human and autonomous modes. There is no pause and no override on the validation checks — a malformed review output is a hard fault.
 
 **On completion**: Proceed to Phase 8 (Evaluate Review).
 
@@ -349,13 +346,13 @@ If returning from a fix cycle (Phase 9), Cleanup and Simplify may have modified 
 3. Find the most recent `.claude/ai/review-*.md` file (by modification time)
 4. Read the review file completely
 5. Parse the YAML frontmatter verdict fields:
-   - `triaged`: Boolean (optional) — `true` if Phase 7 ran on this file (skip-on-zero path leaves this absent or `false`)
+   - `triaged`: Boolean — `true` for all current `/code-review` reports; optional only for historical back-compat files.
    - `verdict`: String — `APPROVED` | `APPROVED_WITH_CONDITIONS` | `REJECTED`
-   - `critical_count`, `warning_count`, `suggestion_count`: Integer — issue counts. **When `triaged: true` is set, these values are post-triage (confirmed-only); the original raw values are preserved as `raw_critical_count` and `raw_warning_count`.** When `triaged` is missing or `false`, the values are the raw reviewer counts as-is (back-compat path, including the Phase 7 skip-on-zero short-circuit).
+   - `critical_count`, `warning_count`, `suggestion_count`: Integer — issue counts. **When `triaged: true` is set, these values are post-verification (confirmed-only); the original raw values are preserved as `raw_critical_count` and `raw_warning_count`.** When `triaged` is missing or `false`, the values are the raw reviewer counts as-is (historical back-compat path only).
    - `plan_issue`: Boolean — `true` if the plan itself needs rework
    - `fixable_by_ai`: Boolean — `true` if AI can fix issues without human guidance
    - `retry_recommended`: Boolean — `true` if a retry cycle is likely to succeed
-   - `backlog_count`: Integer (optional, present only when `triaged: true`) — number of `**Backlog:** yes` tags across deferred CRITICAL/WARNING + SUGGESTIONS. Informational only; does NOT affect verdict routing.
+   - `backlog_count`: Integer (present when `triaged: true`) — number of `**Backlog:** yes` tags across deferred CRITICAL/WARNING + SUGGESTIONS. Informational only; does NOT affect verdict routing.
 6. **Recompute `verdict` from the (post-triage when present) `critical_count` and `warning_count`** using the Path A/B/C routing logic below. The routing is unchanged; only the input fields change. Path B's autonomous-mode `warning_count ≤ 3` threshold operates on the post-triage count when `triaged: true`. The originally-stored `verdict` field in the review file is informational — always trust the recomputed value.
 
 Based on the (recomputed) verdict, follow the appropriate path:
@@ -446,12 +443,11 @@ Phase 6: Simplify
     |   |-- Tests fail --> revert, log, continue
     |
     v
-Phase 7: Triage Review (fresh-context judgment of CRITICAL/WARNING findings)
-    |-- critical_count + warning_count == 0 --> SKIP (file unchanged, no triaged flag)
-    |-- otherwise --> dispatch /triage-review --> review-triager agent edits review file in place
-    |   |-- post-run validation OK --> Phase 8
-    |   |-- validation fails (missing triaged/triaged_at, missing **Triage:**/**Reason:**,
-    |       invalid bucket, count grew, agent crash) --> HALT (clear error, do not enter Phase 8)
+Phase 7: Review Contract Validation
+    |-- review file already pre-adjudicated by /code-review fan-out
+    |-- validation OK --> Phase 8
+    |-- validation fails (missing triaged/triaged_at, missing **Triage:**/**Reason:**,
+        invalid bucket, count grew, malformed backlog fields) --> HALT (clear error, do not enter Phase 8)
     |
     v
 Phase 8: Evaluate Review (reads review-*.md, recomputes verdict from post-triage counts when triaged: true)

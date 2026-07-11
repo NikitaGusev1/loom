@@ -37,7 +37,7 @@ After pulling changes: `npm run build` (the linked binary points at `build/index
 
 ### 2. Claude Code plugin
 
-Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/cleanup`, `/decompose`, `/implement-dag`, the review skills `/code-review` / `/triage-review`, the `plan-reviewer` / `code-reviewer` / `review-triager` / `task-decomposer` / `code-simplifier` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
+Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/cleanup`, `/code-review`, `/decompose`, `/implement-dag`, the `plan-reviewer` / `review-finder` / `review-verifier` / `task-decomposer` / `code-simplifier` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
 
 `/auto-implement` defaults to the **supervised** flow (backgrounds the supervisor, one fresh context per phase, chat just monitors gates); pass `--inline` for the monolithic in-session engine — the only substrate that runs sequential (`/implement-plan`) plans.
 

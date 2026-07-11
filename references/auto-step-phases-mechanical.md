@@ -121,7 +121,7 @@ A sequential run must never reach `mode-selected` with a null `dagPath`.
 
 Surface drift between the merged code and the Figma source of truth by running
 `figma-differ` against modified components. Findings are advisory — they are
-picked up automatically by `code-reviewer` in Phase 8. This phase never blocks
+picked up automatically by `/code-review` in Phase 8. This phase never blocks
 or hangs; it always writes an aggregate summary and advances.
 
 ### Entry
@@ -136,7 +136,7 @@ PLAN_PATH=$(dag-checkpoint get "$CKPT" planPath)
 At the end of this phase the checkpoint receives **one string**: the
 phase-status marker from the aggregate summary. Never the diffs, never
 per-component report content. The four valid marker values (verbatim — grep
-targets for `code-reviewer`):
+targets for `/code-review`):
 
 ```
 figma diff phase ran
@@ -175,7 +175,7 @@ figma MCP disconnected — figma diff phase skipped explicitly
      desktop app + Console plugin running and connected to the local WebSocket
      bridge; if they are not, there is no mechanism to reconnect
      non-interactively. Logging the skip is the correct behavior —
-     `code-reviewer` detects this marker in Phase 8 and notes the missing diff
+     `/code-review` detects this marker in Phase 8 and notes the missing diff
      context in its report.
 
 4. **Construct Figma URL per component**  

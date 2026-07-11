@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Loom",
     "shortDescription": "Use Loom and dag-executor workflows in Codex",
-    "longDescription": "Loom provides Codex-native skills for exploring feature ideas, writing specs and plans, decomposing work into DAGs, running supervised implementations, cleaning up changes, simplifying code, reviewing diffs, and triaging review findings.",
+    "longDescription": "Loom provides Codex-native skills for exploring feature ideas, writing specs and plans, decomposing work into DAGs, running supervised implementations, cleaning up changes, simplifying code, and running fan-out code review with verified findings.",
     "developerName": "Nikita Gusev",
     "category": "Developer Tools",
     "capabilities": [

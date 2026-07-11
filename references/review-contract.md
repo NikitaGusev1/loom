@@ -1,15 +1,24 @@
 # Review-file contract
 
 Single source of truth for the `.claude/ai/review-*.md` frontmatter shape and the
-finding-block conventions that tie three agents together:
+finding-block conventions that tie the review producer to its consumers:
 
-- **`code-reviewer`** *writes* the file (frontmatter + CRITICAL/WARNING/SUGGESTION sections).
-- **`review-triager`** *edits it in place* (appends triage/backlog lines, mutates a fixed subset of frontmatter).
-- **`/auto-implement` Phase 7 validation** and **Phase 8 verdict routing** *parse* it.
+- **The `/code-review` pipeline** (review-finder → review-verifier → in-session
+  convergence) *writes* the file, fully pre-adjudicated — frontmatter, CRITICAL/
+  WARNING/SUGGESTION sections, and every per-finding triage/backlog line, in one
+  pass. The skill self-validates its own output against the invariants below
+  before handing the file off.
+- **The `/code-review` pipeline's own self-validation** (Step 8) and **`/auto-implement`
+  Phase 8 verdict routing** *parse* / enforce it.
 
-If any field name, value enum, or per-finding line shape changes, it must change in all
-four places at once. This file is the canonical reference — the agents link here rather
-than re-stating the contract divergently.
+If any field name, value enum, or per-finding line shape changes, it must change in
+both places at once. This file is the canonical reference — the skill and the
+consumer link here rather than re-stating the contract divergently.
+
+Historical note: pre-fan-out review files (written by the older single-agent review
+flow and separately mutated in place by a standalone triage pass) predate the current
+pipeline. Their output is a strict subset of this contract's shape — see the
+back-compat note under Phase 7/8, below — and still parses.
 
 ## Filename
 
@@ -21,7 +30,7 @@ review `review-2026-06-08-autocommit-export-output-scope.md`.
 
 ## Frontmatter
 
-### Written by `code-reviewer` (pre-triage)
+### Emitted by review-finder (pre-adjudication)
 
 ```yaml
 date: <ISO 8601 with timezone>
@@ -45,7 +54,7 @@ fixable_by_ai: <bool>
 retry_recommended: <bool>
 ```
 
-### Added/mutated by `review-triager` (post-triage)
+### Finalized by review-verifier / convergence (always present — pre-adjudicated)
 
 ```yaml
 triaged: true
@@ -57,7 +66,12 @@ warning_count: <int>        # RECOMPUTED to count of WARNING findings tagged **T
 backlog_count: <int>        # count of **Backlog:** yes lines across all sections (0 valid)
 ```
 
-The triager **must not touch** `verdict`, `suggestion_count`, `plan_issue`,
+`triaged: true` is set unconditionally by convergence, even when `raw_critical_count`
+and `raw_warning_count` are both 0 — the pipeline never emits an un-triaged file, so
+consumers can rely on a single, uniform shape rather than branching on whether triage
+ran.
+
+Convergence **must not touch** `verdict`, `suggestion_count`, `plan_issue`,
 `fixable_by_ai`, `retry_recommended`, or any field not listed above.
 
 ## Verdict-field semantics (authoritative)
@@ -86,7 +100,21 @@ Within each section, `###` blocks. All these styles are valid (convention has dr
 
 Separators `:`, `.`, `—` all valid. Each block ends before the next `###` or section end.
 
-## Per-finding lines appended by `review-triager`
+## Finding-ID convention
+
+review-finder assigns every candidate finding an ID of shape `[<dim>-<sev><ordinal>]`:
+
+- `dim` — the dimension that surfaced it, one of `C` (correctness), `S` (security),
+  `T` (testing), `V` (conventions), `Q` (quality).
+- `sev` — severity, one of `C` (critical), `W` (warning), `S` (suggestion).
+- `ordinal` — sequential within each `dim`+`sev` pair, starting at 1.
+
+Examples: `[C-C1]`, `[C-C2]`, `[S-W2]`, `[T-C1]`. review-verifier and convergence use
+this ID to track a finding across passes; it is internal to the pipeline and does not
+replace the `###` finding-block heading grammar above, which stays as-is in the
+written file.
+
+## Per-finding lines written pre-adjudicated by the `/code-review` pipeline
 
 Every CRITICAL and WARNING block gets, immediately before the next `###` / section end:
 
@@ -104,7 +132,7 @@ Every `deferred` CRITICAL/WARNING block AND every SUGGESTION block gets:
 
 SUGGESTIONS are **not** bucketed (no `**Triage:**` line) — only backlog-tagged.
 
-## Phase 7 fail-loud invariants (what `/auto-implement` validates after triage)
+## Phase 7 fail-loud invariants (self-validated by the pipeline, re-checked by `/auto-implement`)
 
 - `triaged: true` and `triaged_at` present.
 - `backlog_count` present, non-negative integer.
@@ -117,4 +145,16 @@ SUGGESTIONS are **not** bucketed (no `**Triage:**` line) — only backlog-tagged
 - Post-triage `critical_count` ≤ `raw_critical_count`; `warning_count` ≤ `raw_warning_count` (counts only shrink).
 - Counts non-negative integers.
 
-A malformed triage output is a hard fault — Phase 7 halts and the operator repairs by hand.
+A malformed pipeline output is a hard fault — `/code-review`'s self-validation halts
+before handing off, and `/auto-implement` re-checks on ingest; the operator repairs
+by hand.
+
+### Phase 8 back-compat note
+
+Review files predating the `/code-review` fan-out pipeline (produced by the retired
+single-agent review flow, before a separate triage pass mutated them in place) may
+lack `triaged`/`triaged_at`/`raw_*_count`/`backlog_count` entirely.
+Phase 8 treats a missing `triaged` field as "un-triaged": it falls back to the
+pre-triage `critical_count`/`warning_count` and skips the triage-specific
+invariants above. This is a read path only — the pipeline itself never emits
+this shape.

@@ -8,7 +8,7 @@ executes exactly this body — nothing more.
 **Default model for all three phases: `opus`.**  
 The supervisor selects the model from `checkpoint.models` keyed by **phase name**
 (`models[phase] || models.default`) — e.g. `models["validate-plan"]` for Phase 1,
-`models["triage-review"]` for Phase 7, `models["evaluate-review"]` for Phase 8.
+`models["simplified"]` for Phase 7, `models["evaluate-review"]` for Phase 8.
 The phase body documents the default; it does not call the model selector itself.
 
 **All checkpoint I/O must go through the `dag-checkpoint` helper (dag-executor plugin bin/, on PATH).**  
@@ -153,11 +153,11 @@ exit 1
 
 ---
 
-## Phase 7: Triage Review
+## Phase 7: Review Contract Validation
 
 **Orchestration position**: after Phase 6 (Simplify), before Phase 8.  
-**Default model**: `opus` (review-triager subagent pinned to opus).  
-**Ingests**: review YAML frontmatter `critical_count` and `warning_count` integers (pre-triage), then post-triage frontmatter field set for validation. Never reads the review finding bodies or diff output.
+**Default model**: `opus` (judgment/validation phase; no subagent dispatch).
+**Ingests**: review YAML frontmatter and per-finding contract lines emitted by the `/code-review` fan-out pipeline. Reads only enough finding-body structure to validate the required `**Triage:**`, `**Reason:**`, `**Backlog:**`, and `**BacklogReason:**` lines.
 
 ### Entry
 
@@ -170,83 +170,54 @@ REVIEW_PATH=$(dag-checkpoint get "$CKPT" reviewPath)
 
 No resume path: Phase 7 has no human-mode gate. Any failure is a hard stop.
 
-### Step 1 — Read pre-triage frontmatter
+### Step 1 — Validate pre-adjudicated review contract
 
-Read **only the YAML frontmatter block** of `$REVIEW_PATH`. Extract:
-- `critical_count` (integer, required)
-- `warning_count` (integer, required)
-
-If either field is missing or non-integer, halt:
-
-```bash
-dag-checkpoint merge "$CKPT" '{"status":"error","phase":"triage-review"}'
-echo "ERROR: review frontmatter missing critical_count or warning_count"
-exit 1
-```
-
-### Step 2 — Skip path
-
-```bash
-if [ $((critical_count + warning_count)) -eq 0 ]; then
-  echo "No CRITICAL or WARNING findings — skipping triage"
-  dag-checkpoint merge "$CKPT" '{"phase":"evaluate-review","status":"running"}'
-  exit 0
-fi
-```
-
-Do NOT set `triaged: true` on the review file. Phase 8's back-compat branch
-handles a missing `triaged` field correctly.
-
-### Step 3 — Dispatch triage
-
-Run `/triage-review "$REVIEW_PATH"` and wait for completion. The skill spawns
-the `review-triager` agent which edits the review file in place. Capture the
-exit code; a non-zero exit triggers the crash check in Step 4.
-
-### Step 4 — Post-run validation (fail-loud)
-
-After the triage agent completes, re-read **only the YAML frontmatter** of
-`$REVIEW_PATH`. Do NOT read the finding bodies. Extract the updated field set.
+Read `$REVIEW_PATH` and validate the current review-file contract from
+`${CLAUDE_PLUGIN_ROOT}/references/review-contract.md`. Current `/code-review`
+reports are always pre-adjudicated: `triaged: true` is present even when there
+are zero CRITICAL/WARNING findings.
 
 Halt with a clear error message (naming the specific failing check) and exit 1
 if any of the following are true:
 
-1. The triage agent crashed or exited non-zero.
-2. Frontmatter is missing `triaged: true`.
-3. Frontmatter is missing `triaged_at`.
-4. Frontmatter is missing `backlog_count`, OR `backlog_count` is negative or
+1. Frontmatter is missing `triaged: true`.
+2. Frontmatter is missing `triaged_at`.
+3. Frontmatter is missing `raw_critical_count` or `raw_warning_count`, OR either
+   raw count is negative or non-integer.
+4. Frontmatter is missing `critical_count` or `warning_count`, OR either
+   confirmed count is negative or non-integer.
+5. Frontmatter is missing `backlog_count`, OR `backlog_count` is negative or
    non-integer.
-5. Any CRITICAL or WARNING finding block lacks a `**Triage:**` line OR a
+6. Any CRITICAL or WARNING finding block lacks a `**Triage:**` line OR a
    `**Reason:**` line. Scan finding heading lines `### C<n>` / `### W<n>` /
    `### CRITICAL <n>` / `### WARNING <n>` — both heading formats are valid.
-6. Any `**Triage:**` value is not in `{confirmed, deferred, rejected}`.
-7. Any `deferred` CRITICAL or WARNING finding block lacks a `**Backlog:**` line
+7. Any `**Triage:**` value is not in `{confirmed, deferred, rejected}`.
+8. Any `deferred` CRITICAL or WARNING finding block lacks a `**Backlog:**` line
    OR a `**BacklogReason:**` line.
-8. Any SUGGESTION block lacks a `**Backlog:**` line OR a `**BacklogReason:**`
+9. Any SUGGESTION block lacks a `**Backlog:**` line OR a `**BacklogReason:**`
    line (when the SUGGESTIONS section is non-empty).
-9. Any `**Backlog:**` value is not in `{yes, no}`.
-10. `backlog_count` ≠ actual count of `**Backlog:** yes` lines across
+10. Any `**Backlog:**` value is not in `{yes, no}`.
+11. `backlog_count` != actual count of `**Backlog:** yes` lines across
     CRITICAL/WARNING/SUGGESTIONS sections.
-11. Post-triage `critical_count > raw_critical_count` — counts can only shrink
+12. Confirmed `critical_count > raw_critical_count` — counts can only shrink
     or stay equal (monotone-shrink invariant).
-12. Post-triage `warning_count > raw_warning_count` — same monotone-shrink
+13. Confirmed `warning_count > raw_warning_count` — same monotone-shrink
     invariant.
-13. Post-triage `critical_count` or `warning_count` is negative or non-integer.
 
-For checks 5–8, include the specific finding heading (e.g.
+For checks 6–9, include the specific finding heading (e.g.
 `### C2 Missing null guard`) in the error message so the operator can locate it
 without reading the full file.
 
 ```bash
-dag-checkpoint merge "$CKPT" '{"status":"error","phase":"triage-review"}'
-echo "ERROR: triage validation failed — <specific check>"
+dag-checkpoint merge "$CKPT" '{"status":"error","phase":"simplified"}'
+echo "ERROR: review contract validation failed — <specific check>"
 exit 1
 ```
 
 Do NOT enter Phase 8 in any failure case. The operator must repair the review
 file by hand and re-run.
 
-### Step 5 — Advance
+### Step 2 — Advance
 
 All validation checks passed.
 
@@ -259,8 +230,8 @@ exit 0
 
 | Exit | `status` | `phase` | Notes |
 |------|---------|---------|-------|
-| 0    | `running` | `evaluate-review` | Normal advance (or skip-on-zero). |
-| 1    | `error` | `triage-review` | Validation failure; operator must repair review file. |
+| 0    | `running` | `evaluate-review` | Normal advance. |
+| 1    | `error` | `simplified` | Validation failure; operator must repair review file. |
 
 **Mode behavior**: identical in human and autonomous modes. There is no gate and
 no override on the validation checks — a malformed triage output is always a
@@ -270,7 +241,7 @@ hard fault.
 
 ## Phase 8: Evaluate Review
 
-**Orchestration position**: after Phase 7 (Triage Review), or re-entered after
+**Orchestration position**: after Phase 7 (Review Contract Validation), or re-entered after
 Phase 9 (Fix Issues) cycles back through Phase 5 and Phase 6.  
 **Default model**: `opus` (all judgment; no generative code work in this phase).  
 **Ingests**: review YAML frontmatter verdict fields only (`triaged`,
@@ -460,7 +431,7 @@ exit 1
 
 > **Re-entry after fix cycle (Phase 9)**: Phase 9 increments `retryCount` in the
 > checkpoint and transitions to Phase 5 (Cleanup). After Cleanup and Simplify
-> run, the supervisor transitions to Phase 7 (Triage Review), which then
+> run, the supervisor transitions to Phase 7 (Review Contract Validation), which then
 > transitions here. On re-entry, Step 1 detects that the fix cycle produced
 > new code newer than the last review and triggers a fresh `/code-review`. The
 > rest of the phase body is identical.

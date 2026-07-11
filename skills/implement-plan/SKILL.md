@@ -46,7 +46,7 @@ Parse from the invocation:
 - **Plan path** (required): Path to an approved `.claude/ai/plan-*.md` file
 - **Review path** (optional): A second path argument triggers fix-from-review mode
 - **`--verify-simulator`** (optional, frontend/mobile only): After each phase, capture a simulator/device screenshot and check devtools logs for runtime errors. **Availability-gated** — see [Simulator Verification](#simulator-verification-when---verify-simulator-is-set). Skipped silently in repos without the required MCP tooling.
-- **`--orchestrated`** (optional, internal): Set by `/auto-implement`'s inline path. Suppresses this skill's own finalize chain (simplify → triage → fix-loop), leaving **only** the final `/code-review` step — because the orchestrator owns simplify (its Phase 6), triage (Phase 7), and the fix loop (Phase 9), and running them here too would double the work. **Omit it when invoking `/implement-plan` directly**: standalone runs the full self-contained finalize chain. See [After Implementation is Complete](#after-implementation-is-complete).
+- **`--orchestrated`** (optional, internal): Set by `/auto-implement`'s inline path. Suppresses this skill's own finalize chain (simplify → fix-loop), leaving **only** the final `/code-review` step — because the orchestrator owns simplify (its Phase 6) and the fix loop (Phase 9). **Omit it when invoking `/implement-plan` directly**: standalone runs the full self-contained finalize chain. See [After Implementation is Complete](#after-implementation-is-complete).
 - **`--max-retries N`** (optional, default `2`): Cap on the standalone finalize fix-loop iterations. Ignored under `--orchestrated`.
 
 ## Fix-from-Review Mode
@@ -64,10 +64,10 @@ The first argument is always the plan path. The second argument (when present) i
 
 1. **Read the review file completely** — parse the YAML frontmatter and all issue sections
 2. **Read the plan file** — understand the original intent so fixes stay aligned
-3. **Extract all CRITICAL and WARNING items** from the review, applying triage filtering:
+3. **Extract all CRITICAL and WARNING items** from the review, applying adjudication filtering:
    - Note each item's file path and line number reference
    - Note the **Problem** description and **Fix** code example
-   - Check for a **Triage:** tag at the end of each finding's block (added by the `review-triager` agent):
+   - Check for a **Triage:** tag at the end of each finding's block (written by the `/code-review` fan-out pipeline):
      - **Triage:** confirmed → include this finding (act on it)
      - **Triage:** deferred → **skip** this finding entirely (real issue but deferred out of scope)
      - **Triage:** rejected → **skip** this finding entirely (false positive, reviewer misread)
@@ -88,7 +88,7 @@ The first argument is always the plan path. The second argument (when present) i
 - **Do NOT change code** that wasn't flagged in the review unless it's directly required by a fix
 - If a fix requires changes beyond the scope of the original plan, STOP and explain the situation
 - If a suggested fix seems wrong or would break other things, explain why and propose an alternative
-- **Fix mode does NOT run the [finalize chain](#after-implementation-is-complete)** (simplify / code-review / triage / fix-loop). It applies the fixes and returns control to its caller — the standalone Step 4 fix-loop (or `/auto-implement` Phase 9) owns re-running review and deciding whether to loop again.
+- **Fix mode does NOT run the [finalize chain](#after-implementation-is-complete)** (simplify / code-review / fix-loop). It applies the fixes and returns control to its caller — the standalone Step 3 fix-loop (or `/auto-implement` Phase 9) owns re-running review and deciding whether to loop again.
 
 ## Understand Before Changing
 
@@ -182,8 +182,8 @@ Remember: you're implementing a solution, not just checking boxes. Keep the end 
 
 Once all phases are implemented, verified, and the plan checkboxes are fully checked off, run the finalize chain. Do not ask the user — just run it. **What runs depends on `--orchestrated`:**
 
-- **`--orchestrated` set** (invoked by `/auto-implement` inline) — run **only step 2 (`/code-review`)** and stop. The orchestrator owns simplify (its Phase 6), triage (Phase 7), and the fix loop (Phase 9); running them here would double the work. The review report is what `/auto-implement`'s Phases 7–8 consume.
-- **`--orchestrated` NOT set** (standalone `/implement-plan`) — run the **full chain, steps 1→4**, so a direct invocation is self-contained and mirrors the DAG/`auto-implement` path end to end.
+- **`--orchestrated` set** (invoked by `/auto-implement` inline) — run **only step 2 (`/code-review`)** and stop. The orchestrator owns simplify (its Phase 6) and the fix loop (Phase 9); running them here would double the work. The review report is what `/auto-implement`'s Phase 8 consumes.
+- **`--orchestrated` NOT set** (standalone `/implement-plan`) — run the **full chain, steps 1→3**, so a direct invocation is self-contained and mirrors the DAG/`auto-implement` path end to end.
 
 ### Step 1 — `/simplify` (skip under `--orchestrated`)
 
@@ -191,20 +191,11 @@ Quality cleanup of the changed code (reuse, simplification, efficiency, altitude
 
 ### Step 2 — `/code-review` (always)
 
-Comprehensive review of all changes made during implementation (including simplify's edits when step 1 ran). (When invoked from inside this plugin, the skill resolves as `dag-executor:code-review`; the bare `/code-review` works when no other plugin shadows it.) Parse the output path of the `.claude/ai/review-*.md` file it writes — later steps read it.
+Comprehensive review of all changes made during implementation (including simplify's edits when step 1 ran). (When invoked from inside this plugin, the skill resolves as `dag-executor:code-review`; the bare `/code-review` works when no other plugin shadows it.) The review fan-out writes a fully pre-adjudicated `.claude/ai/review-*.md` report with `triaged: true`, confirmed-only counts, raw counts, and backlog tags. Parse the output path of that file — later steps read it.
 
-**If `--orchestrated`: stop here.** The review file is what `/auto-implement`'s Phases 7–8 consume.
+**If `--orchestrated`: stop here.** The review file is what `/auto-implement`'s Phase 8 consumes.
 
-### Step 3 — `/triage-review` (skip under `--orchestrated`)
-
-Fresh-context judgment of the review's CRITICAL/WARNING findings, so the fix-loop chases only real issues — not the same-context confirmation bias of the reviewer's own re-read.
-
-1. Read the review's YAML frontmatter; parse `critical_count` and `warning_count` as integers.
-2. **Skip-on-zero**: if `critical_count + warning_count == 0`, log `No CRITICAL or WARNING findings — skipping triage` and go to Step 4. Leave the review file byte-identical (do NOT set `triaged: true`).
-3. Otherwise run `/triage-review <review-path>` and wait. The `review-triager` agent edits the review file in place (tags each CRITICAL/WARNING `**Triage:** confirmed | deferred | rejected`, rewrites `critical_count`/`warning_count` to post-triage confirmed-only counts, sets `triaged: true`).
-4. **Fail-loud validation** — after the run, re-read the frontmatter and halt with a clear error if: the agent crashed/exited non-zero; `triaged: true` or `triaged_at` is missing; any CRITICAL/WARNING finding lacks a `**Triage:**` line; any `**Triage:**` value is outside `{confirmed, deferred, rejected}`; or a post-triage count is greater than its raw value (counts only shrink). On any failure, stop and tell the user to repair the review file by hand — do NOT proceed to Step 4.
-
-### Step 4 — Evaluate verdict + fix-loop (skip under `--orchestrated`)
+### Step 3 — Evaluate verdict + fix-loop (skip under `--orchestrated`)
 
 Recompute the verdict from the (post-triage when `triaged: true`, else raw) counts:
 
@@ -226,5 +217,5 @@ Route on the recomputed verdict (the stored `verdict` field is informational):
 **Fix-loop** (only on a fixable REJECTED verdict):
 
 1. If the retry counter has reached `--max-retries` (default 2): **stop**, summarize each attempt and what remained unfixed, and escalate to the user. Do not loop further.
-2. Increment the retry counter. Re-invoke **this skill's own fix-from-review mode** — `/implement-plan <plan-path> <review-path> --orchestrated` — passing the just-written (triaged) review path. (`--orchestrated` here prevents the nested call from starting its own finalize chain; this outer loop owns it.) Fix mode applies only the `confirmed` CRITICAL/WARNING findings, skipping `deferred`/`rejected`.
-3. After fixes land, return to **Step 1** (simplify → code-review → triage → evaluate) on the updated code. The cycle repeats until APPROVED / APPROVED_WITH_CONDITIONS or the retry cap is hit.
+2. Increment the retry counter. Re-invoke **this skill's own fix-from-review mode** — `/implement-plan <plan-path> <review-path> --orchestrated` — passing the pre-adjudicated review path. (`--orchestrated` here prevents the nested call from starting its own finalize chain; this outer loop owns it.) Fix mode applies only the `confirmed` CRITICAL/WARNING findings, skipping `deferred`/`rejected`.
+3. After fixes land, return to **Step 1** (simplify → code-review → evaluate) on the updated code. The cycle repeats until APPROVED / APPROVED_WITH_CONDITIONS or the retry cap is hit.

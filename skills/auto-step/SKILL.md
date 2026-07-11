@@ -79,8 +79,7 @@ Branch on `$PHASE` and execute **exactly one** phase body. The fragments are the
 | `reviewing` | 4 — Figma Verification | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` § "Phase 4 — Figma Verification (Post-Merge Diff)" |
 | `figma-verified` | 5 — Cleanup | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` § "Phase 5 — Cleanup" |
 | `cleaned` | 6 — Simplify | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` § "Phase 6 — Simplify" |
-| `simplified` | 7 — Triage Review (first run) | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-judgment.md` § "Phase 7: Triage Review" |
-| `triage-review` | 7 — Triage Review (re-entry after operator repair) | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-judgment.md` § "Phase 7: Triage Review" |
+| `simplified` | 7 — Review Contract Validation | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-judgment.md` § "Phase 7: Review Contract Validation" |
 | `evaluate-review` | 8 — Evaluate Review | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-judgment.md` § "Phase 8: Evaluate Review" |
 | `fix-issues` | 9 — Fix Issues | See Phase 9 body below |
 
@@ -182,7 +181,7 @@ Full picture of what each phase writes on each exit path. Use this to verify the
 | 4 — Figma Verification | `reviewing` | `figma-verified` | _(unchanged)_ | — |
 | 5 — Cleanup | `figma-verified` | `cleaned` | _(unchanged)_ | — |
 | 6 — Simplify | `cleaned` | `simplified` | _(unchanged)_ | — |
-| 7 — Triage Review | `simplified` or `triage-review` | `evaluate-review` | `triage-review` | — |
+| 7 — Review Contract Validation | `simplified` | `evaluate-review` | `simplified` | — |
 | 8 — Evaluate Review | `evaluate-review` | `done` or `fix-issues` | `evaluate-review` | `evaluate-review` / `warnings-gate` or `fix-approval` |
 | 9 — Fix Issues | `fix-issues` | `figma-verified` | `fix-issues` | — |
 
@@ -196,6 +195,6 @@ This skill is intended to be invoked by a supervisor process, not by a human dir
 2. If `phase == mode-selected`: run dag-executor CLI per `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phase-implement.md`; write checkpoint; re-read phase.
 3. If `phase` is terminal (`done`, `aborted`) or parked (`needs-decision`): stop / wait.
 4. Otherwise: `claude -p /auto-step --resume-run <ckpt> --model <phase-model>`
-   - Model selection from `checkpoint.models`, keyed by **phase name** with a `default` fallback (`models[phase] || models.default`): judgment-role phase names (`validate-plan`, `simplified`/`triage-review`, `evaluate-review`) default to Opus 4.8; mechanical-role phase names (`mode-selection`, `reviewing`, `figma-verified`, `cleaned`, `fix-issues`) default to sonnet.
+   - Model selection from `checkpoint.models`, keyed by **phase name** with a `default` fallback (`models[phase] || models.default`): judgment-role phase names (`validate-plan`, `simplified`, `evaluate-review`) default to Opus 4.8; mechanical-role phase names (`mode-selection`, `reviewing`, `figma-verified`, `cleaned`, `fix-issues`) default to sonnet.
 5. Read exit code only. Branch per the exit code contract above.
 6. On exit 2: wait for chat session to write `decision`, then go to step 4 for the same phase.
