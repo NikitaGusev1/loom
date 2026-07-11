@@ -11,12 +11,12 @@ related_research: []
 
 Turn project-local UI todos into a controlled agent intake pipeline. Saving a todo should immediately start triage. Small, clearly relevant, high-confidence requests may execute automatically; ambiguous, broad, risky, or unrelated requests must wait for clarification or approval.
 
-Every executable todo becomes a tracked DAG so its progress, events, verification, and outcome remain visible in the existing localhost UI.
+Every executable todo becomes a tracked Loom run so its progress, verification, and outcome remain visible in the existing localhost UI. Easy work runs sequentially and must not create a DAG. Work that benefits from decomposition or parallelism uses the existing DAG executor.
 
 ## Non-Goals
 
 - Executing arbitrary todo text directly in the UI server process.
-- Bypassing DAG validation, worktree isolation, executor verification, or the supervisor queue.
+- Bypassing Loom review and verification gates, worktree safety, or the selected execution substrate's checkpointing.
 - Automatically approving destructive operations, external side effects, secret handling, or work in a dirty/conflicting repository.
 - Treating an LLM classification as a security boundary.
 - Supporting remote or multi-user intake.
@@ -25,7 +25,9 @@ Every executable todo becomes a tracked DAG so its progress, events, verificatio
 
 The UI stores inbox items in `<project>/.dag-executor/ui-inbox.json`. Items have `open`, `converted`, or `archived` status and optional DAG/task links. The UI server is otherwise read-only for executor state.
 
-The executor already provides the required execution substrate: validated DAG JSON, worktree isolation, event logs, state projection, verification, machine-wide slots, and supervisor queueing. Intake should compose these mechanisms rather than create a second task runner.
+Loom already supports sequential implementation through inline `/auto-implement --no-dag`, which routes to `/implement-plan`. The headless supervisor is currently DAG-only and parks when mode selection resolves to sequential. Intake therefore needs a durable sequential-run wrapper around the existing inline Loom capability; it must not model easy work as a one-task DAG.
+
+The DAG executor remains the substrate for larger or parallel work. Intake composes both existing Loom paths rather than creating another implementation engine.
 
 The news-app inbox currently contains this useful ambiguity fixture:
 
@@ -68,7 +70,7 @@ Each inbox item gains an optional structured `triage` record:
   "needsClarification": false,
   "questions": [],
   "estimatedFiles": ["app/screens/DigestScreen.tsx"],
-  "proposedAction": "execute-single-task",
+  "proposedAction": "execute-sequential",
   "evaluatedAt": "2026-07-11T14:00:00.000Z"
 }
 ```
@@ -78,7 +80,7 @@ Controlled values:
 - `relevance`: `relevant | adjacent | unrelated | unknown`
 - `complexity`: `trivial | small | medium | large | unknown`
 - `risk`: `low | elevated | high`
-- `proposedAction`: `execute-single-task | propose-dag | clarify | defer | reject`
+- `proposedAction`: `execute-sequential | propose-dag | clarify | defer | reject`
 
 The triage response must be schema-validated. Invalid model output becomes a visible triage error and never defaults to execution.
 
@@ -105,26 +107,44 @@ The model proposes an action, but application code owns the final gate. Automati
 - Confidence is at least `0.85`.
 - `needsClarification` is false.
 - The project is a readable git repository with an acceptable clean-state policy.
-- No active DAG claims overlapping files.
+- No active sequential or DAG run claims overlapping files.
 - The request does not match a mandatory-approval category.
 
 Mandatory-approval categories include destructive changes, migrations, authentication/authorization, secrets, dependency installation, network publishing, paid/external services, broad refactors, executor configuration changes, and ambiguous acceptance criteria.
 
 Failure of any gate routes the item to `awaiting-clarification`, `awaiting-approval`, or `deferred`; it never silently executes.
 
-### Conversion And Execution
+### Execution Substrate Selection
+
+Triage proposes a substrate and deterministic application policy verifies it:
+
+| Work shape | Substrate | Artifact |
+| --- | --- | --- |
+| Trivial/small, narrow, sequential | Inline Loom `/implement-plan` | Compact approved plan and sequential run checkpoint |
+| Medium, coupled, or approval-worthy | Proposed DAG | Plan and decomposition awaiting approval |
+| Large or usefully parallel | DAG executor/supervisor | Plan, validated decomposition, events, and state |
+| Ambiguous, risky, or unrelated | No execution | Clarification, approval, defer, or reject state |
+
+One task is not a reason to create a DAG. DAG mode is selected only when decomposition, dependency modeling, isolated parallel work, or useful concurrency justifies it.
+
+### Sequential Runner
 
 For approved trivial/small work:
 
-1. Generate a one-task decomposition using the existing DAG schema.
-2. Write it under `<project>/.dag-executor/intake/<inbox-id>.json` using an atomic write.
-3. Persist `linkedDagPath` before starting execution.
-4. Submit the DAG through the existing supervisor queue with a normal priority and standard verification.
-5. Mark the item `queued`, then derive `running`, `completed`, `failed`, or `blocked` from executor artifacts.
+1. Generate a compact approved plan at `<project>/.dag-executor/intake/<inbox-id>.plan.md`. It contains the request, acceptance criteria, likely files, verification commands, and `execution_mode: sequential`, but no `decomposition_path`.
+2. Persist `linkedPlanPath` and a unique proposal revision before execution.
+3. Create `<project>/.dag-executor/intake/runs/<run-id>.json` plus an append-only log.
+4. Launch a headless provider session through a typed process adapter. It invokes Loom's inline sequential path, equivalent to `/auto-implement <plan> --no-dag --inline --mode autonomous`.
+5. Persist coarse phases: `starting`, `implementing`, `verifying`, `reviewing`, and terminal status.
+6. Store resulting commits, changed files, verification summary, and review outcome.
 
-Medium work produces a proposed multi-task DAG and waits for explicit approval. Large work produces a planning summary and questions rather than a DAG that appears ready to run.
+Only one sequential runner per project may hold the mutation lease. Additional eligible todos remain queued in creation order. The wrapper owns subprocess lifecycle, cancellation, checkpoint recovery, and log capture until Loom supports native supervised sequential execution. Loom remains responsible for editing, tests, formatting, and review.
 
-The UI server should invoke a narrow intake service API, not shell-concatenate commands. Process arguments must be passed as an argument array. Todo text must never become shell syntax.
+### DAG Runner
+
+Medium work produces a proposed multi-task DAG and waits for explicit approval. Large or usefully parallel work follows the existing validated decomposition and supervisor queue path. The inbox links to the plan and DAG and derives detailed progress from normal executor events and state.
+
+The UI server invokes narrow typed services. Process arguments are passed as an argument array; todo text never becomes shell syntax.
 
 ### Persistence
 
@@ -143,8 +163,11 @@ An item gains:
 - `intakeStatus`
 - `triage`
 - `approval`
+- `executionMode`
+- `linkedPlanPath`
 - `linkedDagPath`
 - `linkedTaskId`
+- `linkedRunId`
 - `lastError`
 - `executionStartedAt`
 - `executionCompletedAt`
@@ -163,7 +186,39 @@ Each todo displays a compact state and its most important reason:
 - `Completed`
 - `Blocked` or `Failed`
 
-Clarification items show the generated questions and a response field. Approval items show the proposed scope, complexity, risk, likely files, and DAG preview before an explicit Approve action. Executing items link to the selected DAG/task in the monitoring surface.
+Clarification items show generated questions and a response field. Approval items show scope, complexity, risk, likely files, and either a sequential plan preview or DAG preview before an explicit Approve action.
+
+### Runner Monitoring
+
+The main monitoring surface treats sequential and DAG execution as two runner kinds under one `Runs` view. The existing DAG sidebar remains, but the default project navigation gains `Inbox` and `Runs` tabs with counts.
+
+The Runs list shows:
+
+- Todo summary and runner kind: `Sequential` or `DAG`.
+- Queue position, current phase, status, start time, and elapsed time.
+- Provider/model and process or supervisor health.
+- Changed-file count, verification result, review verdict, and resulting commit when available.
+- A clear `Waiting for project lease` reason when another sequential runner owns mutation access.
+
+Selecting a sequential run replaces the backlog board with a phase track:
+
+```text
+Triage -> Plan -> Implement -> Verify -> Review -> Done
+```
+
+The detail area shows bounded live log output, proposed/changed files, current command category, last checkpoint, verification failures, review findings, and crash-recovery state. Logs auto-scroll only while the user is already at the bottom. Secrets and provider credentials must be redacted before persistence and display.
+
+Selecting a DAG run uses the existing backlog, task inspector, event stream, and progress UI. The shared header still shows the originating todo and provides navigation back to its inbox record.
+
+Runner controls are state-aware:
+
+- `Cancel` for queued or running sequential work.
+- `Approve` or `Answer questions` at intake gates.
+- `Inspect dirty state` after a crash.
+- `Retry` only after deterministic recovery checks pass.
+- DAG controls remain delegated to the supervisor-control follow-up.
+
+The UI polls runner checkpoints with the existing five-second refresh initially. Streaming can be added later; it is not required for the first runner view.
 
 The composer includes an `Auto-run eligible work` toggle, enabled by default at the project level. Turning it off still performs triage but routes all executable work to approval.
 
@@ -174,7 +229,9 @@ Add these local endpoints:
 - `POST /api/inbox/:id/triage` retries triage.
 - `POST /api/inbox/:id/clarify` appends a user response and re-triages.
 - `POST /api/inbox/:id/approve` approves the exact persisted proposal revision.
-- `POST /api/inbox/:id/cancel` cancels pending intake or requests supervisor cancellation for queued work.
+- `POST /api/inbox/:id/cancel` cancels pending intake, terminates a sequential child session, or requests supervisor cancellation for DAG work.
+- `GET /api/intake/runs` lists sequential and DAG runs in a normalized summary shape.
+- `GET /api/intake/runs/:id` returns a run checkpoint and bounded recent logs/events.
 - `GET /api/intake/status` returns worker health and project policy.
 - `PATCH /api/intake/policy` updates local auto-run eligibility and thresholds.
 
@@ -198,15 +255,19 @@ Rejected. Model output informs the decision, but deterministic application polic
 
 - Saving a todo persists it before asynchronous triage starts.
 - Triage produces schema-validated relevance, complexity, risk, confidence, rationale, questions, estimated scope, and a proposed action.
-- Only low-risk, relevant, trivial/small, high-confidence work can auto-run.
+- Only low-risk, relevant, trivial/small, high-confidence work can auto-run sequentially.
 - Ambiguous todos, including the news-app ambiguity fixture, request clarification and launch no executor process.
 - Medium work shows a DAG proposal and waits for explicit approval.
 - Mandatory-approval categories cannot auto-run regardless of model confidence.
-- Every execution uses a validated DAG, existing supervisor/executor pathways, worktree isolation, and verification.
-- Inbox records link to generated DAGs and reflect queued/running/completed/failed state after restarts.
+- Easy work creates no DAG JSON and runs through Loom's sequential `/implement-plan` path.
+- Sequential work has a durable checkpoint and redacted log, runs one-at-a-time per project, and exposes implementation, verification, and review progress.
+- DAG execution uses validated decompositions and existing supervisor/executor pathways.
+- Inbox records link to sequential runs or generated DAGs and reflect queued/running/completed/failed state after restarts.
 - Duplicate delivery or server restart cannot execute the same proposal twice.
+- A crashed sequential run with a dirty repository never auto-restarts without review.
 - Disabling project auto-run still triages todos but requires approval for all execution.
-- UI tests cover create-to-triage, clarification, approval, auto-run, rejection, restart recovery, and stale-proposal handling.
+- The Runs view lists both runner kinds and shows sequential phases, logs, files, verification, review, cancellation, and recovery state.
+- UI tests cover create-to-triage, clarification, approval, sequential auto-run, DAG routing, runner monitoring, cancellation, rejection, restart recovery, and stale-proposal handling.
 
 ## Risks And Open Questions
 
@@ -215,13 +276,17 @@ Rejected. Model output informs the decision, but deterministic application polic
 - File-overlap detection is advisory until task ownership contracts are comprehensive.
 - Supervisor queue APIs currently exist primarily as CLI/file operations; implementation should expose a typed internal module before wiring HTTP handlers.
 - Cancellation semantics differ before queueing, while queued, and while an agent is running and must be represented explicitly.
+- A process crash may leave uncommitted project changes. Recovery must inspect git state and require approval rather than blindly relaunching.
+- The sequential wrapper temporarily duplicates lifecycle capabilities from the DAG-only supervisor and should be replaceable by native Loom supervised-sequential support later.
 
 ## Implementation Notes
 
 - Extend `src/ui/types.ts` and `src/ui/inbox.ts` with a backward-compatible schema migration and strict runtime validation.
-- Add a dedicated `src/ui/intake/` boundary for context collection, triage schemas, deterministic policy, job recovery, DAG conversion, and supervisor submission.
+- Add a dedicated `src/ui/intake/` boundary for context collection, triage schemas, deterministic policy, job recovery, execution-mode selection, and run projection.
+- Add a typed sequential runner that atomically checkpoints, appends redacted logs, owns a per-project mutation lease, launches the provider CLI without a shell, and handles cancellation.
+- Generate compact approved plan files for sequential work; never generate one-task decompositions.
 - Keep model/provider invocation outside HTTP request handlers.
 - Reuse DAG validation before writing or queueing generated decompositions.
 - Refactor supervisor queue operations into importable typed functions instead of parsing CLI output.
-- Add event/status projection from linked DAGs rather than duplicating executor state in the inbox file.
+- Project status from linked sequential checkpoints or DAG artifacts rather than duplicating detailed run state in the inbox file.
 - Preserve localhost-only binding and the existing no-store response policy.
