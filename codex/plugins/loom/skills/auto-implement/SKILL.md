@@ -1,8 +1,6 @@
 ---
-description: Orchestrate full plan → implement → review → PR flow
-argument-hint: <plan-path> [--dag] [--mode human]
-phase: orchestration
-disable-model-invocation: true
+name: auto-implement
+description: "Orchestrate the full plan to implementation to review flow. Use when the user wants Loom to run the end-to-end implementation pipeline from an approved plan."
 ---
 
 # Auto Implement
@@ -17,6 +15,10 @@ If unsure which path you'll take, `/model opus` is the safe default. Heavy judgm
 You are the entry point for the implementation pipeline. **By default you launch the supervised flow** (checkpoint + background supervisor, one phase per fresh context) and then monitor it. On `--inline` you instead run the whole pipeline in this session: orchestrate `/implement-plan` (which includes a `/code-review` step) and manage the review-fix-retry loop with configurable human oversight.
 
 **Output**: Progress is tracked via todo list. Final output is reviewed code ready for manual PR creation via `/create-pr`.
+
+## Artifact Repository
+
+Before locating or writing specs, plans, decompositions, reviews, or run state, load `../../references/artifact-repository.md`. Treat the central artifact repo as durable knowledge and project-local `.claude/ai/` as the execution compatibility location. If no plan path is supplied, prefer the newest central `projects/<project-slug>/plans/plan-*.md`, then fall back to `.claude/ai/plan-*.md`.
 
 ## Parameters
 
@@ -33,7 +35,7 @@ Parse from `$ARGUMENTS`:
 - **Max retries** (optional): `--max-retries N` (default: 2)
 - **Verify simulator** (optional): `--verify-simulator` passes through to `/implement-plan` to enable screenshot + devtools log checks after each phase
 
-If no plan path is provided, search `.claude/ai/` for the most recent `plan-*.md` file and confirm with the user.
+If no plan path is provided, search the central artifact repo first, then `.claude/ai/` for the most recent `plan-*.md` file and confirm with the user.
 
 ## Mode Definitions
 

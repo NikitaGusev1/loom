@@ -1,8 +1,6 @@
 ---
-description: Single-phase headless executor for the /auto-implement supervisor loop. Reads checkpoint.phase, runs exactly that one phase, writes the updated checkpoint, and exits with the supervisor signal code. One invocation == one phase.
-argument-hint: --resume-run <checkpoint-path>
-phase: orchestration
-disable-model-invocation: true
+name: auto-step
+description: "Execute or inspect one phase of the auto-implement supervisor loop from a checkpoint. Use when resuming or debugging a single Loom automation phase."
 ---
 
 # Auto Step
@@ -10,6 +8,10 @@ disable-model-invocation: true
 Headless single-phase runner for the `/auto-implement` supervisor loop. **One invocation executes exactly one pipeline phase**, then exits. The loop lives in the supervisor — never here. This is the refresh boundary: each phase gets a clean `claude -p` context.
 
 **Session model: set by the supervisor, not by this skill.** Each phase is launched as a one-shot `claude -p … --model <m>`, where `<m>` comes from the supervisor's **per-phase model map** (`models[phase] || models.default`, seeded by `/auto-run`: judgment phases → Opus 4.8, mechanical/routing phases → sonnet). A `-p` run can't `/model`-switch mid-session, so there is no in-session mandate to honor — the map is authoritative. (For a rare manual interactive `/auto-step` run, prefer Opus 4.8: the judgment phases want it.) Judgment phases (1, 7, 8) also spawn subagents internally pinned to Opus 4.8 regardless of the session model.
+
+## Artifact Repository
+
+Before locating related plan/review/run context, load `../../references/artifact-repository.md`. Prefer central project knowledge under `projects/<project-slug>/`, but keep checkpoint mutation in the project-local `.claude/ai/auto-run-*.json` file provided by `--resume-run`.
 
 ## Exit Code Contract (Resumable Signal)
 

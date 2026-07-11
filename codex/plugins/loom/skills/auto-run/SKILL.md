@@ -1,8 +1,6 @@
 ---
-description: Thin chat-side launcher, monitor, and gate-router for the /auto-implement supervisor loop
-argument-hint: <plan-path> [--mode human|autonomous] [--models judgment=opus,mechanical=sonnet] [--slug <run-id>]
-phase: orchestration
-disable-model-invocation: true
+name: auto-run
+description: "Launch, monitor, and route gates for the auto-implement supervisor loop. Use when supervising a checkpointed Loom or dag-executor run from an approved plan."
 ---
 
 # Auto Run
@@ -16,6 +14,10 @@ Thin launcher, monitor, and gate-router for the `/auto-implement` supervisor loo
 **Context discipline**: The chat session holds no implementation work. It never reads plan files, review bodies, diffs, or supervisor logs. It only ingests compact checkpoint fields. This keeps the chat context ≥70% free for the lifetime of the run.
 
 **Model philosophy**: Model is chosen by reasoning need, not window size. Opus 4.8 and Sonnet both have 200k context — model determines reasoning quality. Judgment phases get Opus 4.8; mechanical phases get Sonnet. User overrides apply at launch time.
+
+## Artifact Repository
+
+Before resolving a plan path, load `../../references/artifact-repository.md`. If the invocation does not include a plan path, prefer the newest central `projects/<project-slug>/plans/plan-*.md`, then fall back to `.claude/ai/plan-*.md`. Keep checkpoint/log execution state in project-local `.claude/ai/` unless the user asks to export it to the central `runs/` folder.
 
 ---
 

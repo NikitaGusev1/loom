@@ -7,12 +7,16 @@ description: "Execute an existing dag-executor decomposition. Use when the user 
 
 Run the `dag-executor` CLI against a decomposition file.
 
+## Artifact Repository
+
+Before locating a DAG, load `../../references/artifact-repository.md`. Prefer central decompositions under `projects/<project-slug>/decompositions/`.
+
 ## Workflow
 
 1. Locate the DAG path:
    - use the explicit argument when provided;
    - otherwise read `decomposition_path` from the selected plan;
-   - otherwise find the newest `.claude/ai/decomposition-*.json` and confirm.
+   - otherwise find the newest central `projects/<project-slug>/decompositions/decomposition-*.json`, then fall back to `.claude/ai/decomposition-*.json`, and confirm.
 2. Inspect repo guidance for expected verification commands.
 3. Run the appropriate command from the repo root, typically:
 

@@ -1,7 +1,6 @@
 ---
-description: Executes an approved implementation plan phase-by-phase with test/lint/typecheck verification. Use when the user says "implement the plan", "start implementing", "execute plan", or provides a plan file path. Also handles fix-from-review mode when given a review file. The sequential implementer behind /auto-implement's non-DAG path.
-argument-hint: <plan-path> [review-path] [--verify-simulator] [--orchestrated] [--max-retries N]
-phase: implementation
+name: implement-plan
+description: "Execute an approved implementation plan phase by phase with test, lint, and typecheck verification. Use when the user says implement the plan, start implementing, execute plan, or provides a plan file path."
 ---
 
 # Implement Plan
@@ -9,6 +8,10 @@ phase: implementation
 **MANDATORY session model: sonnet.** This is the implementation tier — sonnet handles plan-driven coding with full quality. Opus wastes tokens on mechanical plan execution; haiku is too weak for code edits. Switch via `/model sonnet` before invoking.
 
 You are tasked with implementing an approved technical plan. These plans contain phases with specific changes and success criteria.
+
+## Artifact Repository
+
+Before locating a plan or related review, load `../../references/artifact-repository.md`. Prefer central artifacts under `projects/<project-slug>/` over project-local `.claude/ai/` unless the user gives an explicit path. If the next executor step needs a project-local path, copy or reference the central artifact into `.claude/ai/` rather than moving it.
 
 ## Getting Started
 

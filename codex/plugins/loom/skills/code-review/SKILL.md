@@ -1,6 +1,6 @@
 ---
-description: Conducts comprehensive code review of recent changes covering security, quality, correctness, testing, and conventions. Use when user says "review my code", "check my changes", after implementing features, or before creating a PR. Outputs a review report to .claude/ai/.
-phase: review
+name: code-review
+description: "Conduct comprehensive code review of recent changes covering security, quality, correctness, testing, and conventions. Use when user says review my code, check my changes, after implementing features, or before creating a PR."
 ---
 
 # Code Review
@@ -11,7 +11,11 @@ A fan-out orchestrator: this skill runs entirely in-session (no single delegate 
 
 The review-file frontmatter and finding-block shape are governed by `references/review-contract.md` — this skill populates every field the contract defines, including the post-triage set, in one pass (no separate triage step, no un-triaged intermediate file).
 
-**Output**: Review report saved to `.claude/ai/review-YYYY-MM-DD-description.md`
+## Artifact Repository
+
+Before looking for related plans/specs/reviews, load `../../references/artifact-repository.md`. Search the central artifact repo for the target project before falling back to `.claude/ai/`, `.codex/ai/`, or `docs/superpowers/`.
+
+**Output**: Review report saved durably to `projects/<project-slug>/reviews/review-YYYY-MM-DD-description.md` in the central artifact repo. Also write a compatibility copy to `.claude/ai/review-YYYY-MM-DD-description.md` when an implementation pipeline expects project-local review artifacts.
 
 ## Step 1: Gather Metadata + Diff
 
@@ -28,7 +32,7 @@ The review-file frontmatter and finding-block shape are governed by `references/
 
 ## Step 3: Related-Docs / Figma-Diff Scan + Filename
 
-- Search `.claude/ai/` for `plan-YYYY-MM-DD-*.md` and matching research/spec documents (by date, topic, or commit) — populates `related_plan` / `related_research` frontmatter (omit the field entirely when not found — never `"None"` or an empty string).
+- Search the central artifact repo, then `.claude/ai/`, for `plan-YYYY-MM-DD-*.md` and matching research/spec documents (by date, topic, or commit) — populates `related_plan` / `related_research` frontmatter (omit the field entirely when not found — never `"None"` or an empty string).
 - Scan `.claude/ai/` for `figma-diff-*.md` files newer than the prior review (or newer than the branch base if no prior review exists) — a no-op when absent. Any flagged mismatches fold into the relevant finder's findings as extra context (no new verdict fields).
 - Generate the filename: `.claude/ai/review-YYYY-MM-DD-description.md`, where `description` mirrors the related plan's filename (drop the `plan-` prefix) when a plan was found, else a descriptive kebab-case name.
 

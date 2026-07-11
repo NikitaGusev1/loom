@@ -7,17 +7,21 @@ description: "Create an implementation plan from an existing spec document, espe
 
 Turn an existing spec into an implementation plan.
 
+## Artifact Repository
+
+Before locating a spec or writing a plan, load `../../references/artifact-repository.md`. Prefer central artifacts under `projects/<project-slug>/` over older project-local docs unless the user gives an explicit path.
+
 ## Inputs
 
 - Preferred: explicit path to a spec file.
-- If no path is provided, find the newest `.claude/ai/spec-*.md` or `.codex/ai/spec-*.md` and confirm it is the intended source.
+- If no path is provided, find the newest approved spec in the central artifact repo, then fall back to `.claude/ai/spec-*.md` or `.codex/ai/spec-*.md`, and confirm it is the intended source.
 
 ## Workflow
 
 1. Read the spec fully.
 2. Do a targeted freshness check only where the spec references files, APIs, or assumptions.
 3. Resolve gaps with focused file reads or a concise user question.
-4. Write a plan at `.claude/ai/plan-YYYY-MM-DD-description.md`.
+4. Write the durable plan at `projects/<project-slug>/plans/plan-YYYY-MM-DD-description.md` in the central artifact repo. Also copy it to `.claude/ai/` only when the next tool requires a project-local path.
 
 ## Plan Shape
 
