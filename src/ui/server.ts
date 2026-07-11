@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { MAX_GLOBAL_SLOTS } from '../consts.js';
 import { DEFAULT_SLOT_DIR } from '../semaphore.js';
 import { scanSlots } from '../slots-status.js';
+import { UI_HTML } from './assets.js';
 import { discoverDags } from './discovery.js';
 import { archiveInboxItem, createInboxItem, readInbox, updateInboxItemStatus } from './inbox.js';
 import { loadDagDetail, loadTaskDetail } from './projection.js';
@@ -27,9 +28,9 @@ const json = (res: ServerResponse, statusCode: number, value: unknown): void => 
   res.end(JSON.stringify(value));
 };
 
-const text = (res: ServerResponse, statusCode: number, value: string): void => {
+const text = (res: ServerResponse, statusCode: number, value: string, contentType = TEXT_CONTENT_TYPE): void => {
   res.writeHead(statusCode, {
-    'content-type': TEXT_CONTENT_TYPE,
+    'content-type': contentType,
     'cache-control': 'no-store',
   });
   res.end(value);
@@ -88,6 +89,11 @@ export const createUiServer = (options: UiServerOptions): Server => {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const method = req.method ?? 'GET';
       const path = url.pathname;
+
+      if (method === 'GET' && (path === '/' || path === '/index.html')) {
+        text(res, 200, UI_HTML, 'text/html; charset=utf-8');
+        return;
+      }
 
       if (method === 'GET' && path === '/api/project') {
         const discovered = discoverDags(projectPath);

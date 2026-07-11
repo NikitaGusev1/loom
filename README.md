@@ -310,6 +310,24 @@ Stale worktrees from a previous run are force-removed before creating a new one 
 
 ## CLI Flags
 
+### Local UI
+
+Start the localhost operations console for a project or repository:
+
+```sh
+dag-executor --ui --project=/path/to/project
+```
+
+The command prints its local address, for example:
+
+```text
+DAG UI listening on http://127.0.0.1:51234
+```
+
+The UI discovers DAG JSON files below the project path, reads their event and state artifacts, shows machine-wide executor slot usage, and stores local todo items in `.dag-executor/ui-inbox.json`.
+
+Executor state is read-only in this first version. The browser cannot start, stop, resume, rerun, or reorder work; edit DAGs; mutate state or event files; or run git commands.
+
 ```
 dag-executor <decomposition.json> [flags]
 ```

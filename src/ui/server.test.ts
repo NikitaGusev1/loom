@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -156,6 +157,29 @@ describe('createUiServer', () => {
     });
   });
 
+  it('GET and PATCH /api/inbox list and update inbox items', async () => {
+    await withServer(async (baseUrl) => {
+      const created = await fetchJson(baseUrl, '/api/inbox', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ body: 'Turn this into agent work' }),
+      });
+      const id = encodeURIComponent(created.json.item.id);
+      const updated = await fetchJson(baseUrl, `/api/inbox/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'converted', linkedDagPath: dagPath, linkedTaskId: 'task-a' }),
+      });
+      const listed = await fetchJson(baseUrl, '/api/inbox');
+
+      assert.equal(updated.response.status, 200);
+      assert.equal(updated.json.item.status, 'converted');
+      assert.equal(updated.json.item.linkedTaskId, 'task-a');
+      assert.equal(listed.json.items[0].id, created.json.item.id);
+      assert.equal(listed.json.items[0].status, 'converted');
+    });
+  });
+
   it('POST /api/inbox/:id/archive archives an inbox item', async () => {
     await withServer(async (baseUrl) => {
       const created = await fetchJson(baseUrl, '/api/inbox', {
@@ -181,5 +205,48 @@ describe('createUiServer', () => {
       assert.equal(response.headers.get('cache-control'), 'no-store');
       assert.equal(await response.text(), 'Not found');
     });
+  });
+
+  it('serves the one-tab ops console HTML', async () => {
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/`);
+      const html = await response.text();
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type') ?? '', /^text\/html/);
+      assert.match(html, /DAG Executor/);
+      assert.match(html, /Read-only/);
+      assert.match(html, /Todo inbox/);
+      assert.match(html, /api\/dags/);
+    });
+  });
+
+  it('starts from the dag-executor --ui CLI path', async () => {
+    const child = spawn(process.execPath, ['build/index.js', '--ui', `--project=${projectDir}`, '--port=0']);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => (stdout += String(chunk)));
+    child.stderr.on('data', (chunk) => (stderr += String(chunk)));
+
+    const url = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`timed out waiting for UI URL; stderr=${stderr}`)), 5000);
+      child.stdout.on('data', () => {
+        const match = stdout.match(/DAG UI listening on (http:\/\/127\.0\.0\.1:\d+)/);
+        if (match) {
+          clearTimeout(timeout);
+          resolve(match[1]);
+        }
+      });
+      child.on('exit', (code) => reject(new Error(`UI process exited ${code}; stderr=${stderr}`)));
+    });
+
+    try {
+      const response = await fetch(`${url}/api/dags`);
+      const body = await response.json();
+      assert.equal(body.dags[0].id, 'work');
+    } finally {
+      child.kill('SIGTERM');
+      await new Promise((resolve) => child.on('exit', resolve));
+    }
   });
 });
