@@ -1,6 +1,7 @@
 import type { BacklogBlockedTask, DecompositionDAG, ExecutionState, TaskStatus } from '../types.js';
 import type { DagEvent } from '../events/types.js';
 import type { SlotsScan } from '../slots-status.js';
+import type { UiApproval, UiExecutionMode, UiIntakeStatus, UiTriageResult } from './intake/types.js';
 
 export type UiInboxStatus = 'open' | 'converted' | 'archived';
 
@@ -13,15 +14,26 @@ export interface UiInboxItem {
   source: 'ui';
   linkedDagPath: string | null;
   linkedTaskId: string | null;
+  intakeStatus?: UiIntakeStatus;
+  triage?: UiTriageResult | null;
+  approval?: UiApproval | null;
+  executionMode?: UiExecutionMode | null;
+  linkedPlanPath?: string | null;
+  linkedRunId?: string | null;
+  lastError?: string | null;
+  executionStartedAt?: string | null;
+  executionCompletedAt?: string | null;
 }
 
-export interface UiInboxFile {
+export interface UiInboxFileV1 {
   schemaVersion: 1;
   items: UiInboxItem[];
 }
 
+export type UiInboxFile = UiInboxFileV1;
+
 export interface UiError {
-  scope: 'project' | 'dag' | 'state' | 'events' | 'inbox' | 'slots';
+  scope: 'project' | 'dag' | 'state' | 'events' | 'inbox' | 'intake' | 'run' | 'slots';
   path?: string;
   message: string;
 }

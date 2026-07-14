@@ -1,7 +1,8 @@
 ---
 date: 2026-07-11
 author: Codex
-status: draft
+status: approved
+implementation_status: implemented-pending-localhost-verification
 related_spec: docs/superpowers/specs/2026-07-11-ui-todo-agent-intake.md
 decomposition_path:
 ---

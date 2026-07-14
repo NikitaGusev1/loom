@@ -151,13 +151,13 @@ jq -r 'select(.taskId == "my-task-id")' decomposition.events.jsonl
 
 ### DAG-level
 
-| Kind             | When emitted                                      | Payload fields                                                                                | Consumer                      |
-| ---------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------- |
-| `dag.started`    | Executor begins a fresh or resumed run            | `dagPath`, `dagId`, `branch`, `resume`                                                        | Reducer (sets run start time) |
-| `dag.completed`  | All layers finished (success or partial)          | `dagPath`, `dagId`, `totalTasks`, `succeededTasks`, `failedTasks`, `durationMs`, `finalState` | Reducer, human                |
-| `dag.paused`     | Layer/backlog fails and executor stops (resumable) | `dagPath`, `dagId`, `reason`, `currentLayer`, `blockedTasks?`, `quota?`                        | Reducer, human                |
-| `dag.aborted`    | SIGINT / SIGTERM received or fatal internal error | `dagPath`, `dagId`, `reason`, `signal`                                                        | Reducer, human                |
-| `dag.base-moved` | Base branch HEAD changed between layer runs       | `dagPath`, `dagId`, `previousCommit`, `newCommit`, `branch`                                   | Reducer (abort trigger)       |
+| Kind             | When emitted                                       | Payload fields                                                                                | Consumer                      |
+| ---------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------- |
+| `dag.started`    | Executor begins a fresh or resumed run             | `dagPath`, `dagId`, `branch`, `resume`                                                        | Reducer (sets run start time) |
+| `dag.completed`  | All layers finished (success or partial)           | `dagPath`, `dagId`, `totalTasks`, `succeededTasks`, `failedTasks`, `durationMs`, `finalState` | Reducer, human                |
+| `dag.paused`     | Layer/backlog fails and executor stops (resumable) | `dagPath`, `dagId`, `reason`, `currentLayer`, `blockedTasks?`, `quota?`                       | Reducer, human                |
+| `dag.aborted`    | SIGINT / SIGTERM received or fatal internal error  | `dagPath`, `dagId`, `reason`, `signal`                                                        | Reducer, human                |
+| `dag.base-moved` | Base branch HEAD changed between layer runs        | `dagPath`, `dagId`, `previousCommit`, `newCommit`, `branch`                                   | Reducer (abort trigger)       |
 
 ### Layer-level
 
@@ -326,27 +326,45 @@ DAG UI listening on http://127.0.0.1:51234
 
 The UI discovers DAG JSON files below the project path, reads their event and state artifacts, shows machine-wide executor slot usage, and stores local todo items in `.dag-executor/ui-inbox.json`.
 
-Executor state is read-only in this first version. The browser cannot start, stop, resume, rerun, or reorder work; edit DAGs; mutate state or event files; or run git commands.
+Executor monitoring remains read-only. The browser does not directly start, stop, resume, rerun, or reorder executor tasks; edit DAGs; mutate state or event files; or run arbitrary git commands. Approved agent intake uses the controlled Loom runner paths described below.
+
+#### Agent intake
+
+Todos added in the UI are triaged against bounded project context. Clearly relevant, low-risk, high-confidence trivial or small work can run sequentially through Loom without creating a DAG. Medium, large, ambiguous, risky, or unrelated work waits for clarification or approval; work that benefits from decomposition is proposed as a DAG and enters the supervisor queue only after approval.
+
+The Runs view monitors sequential and DAG work together. Sequential runs show their plan, implementation, verification, and review phases plus bounded redacted logs. DAG runs retain the backlog, task, and event views.
+
+Local intake state is stored under:
+
+```text
+.dag-executor/ui-inbox.json
+.dag-executor/intake/plans/
+.dag-executor/intake/runs/
+```
+
+Only one sequential runner mutates a project at a time. Automatic execution requires a git repository with no project changes other than UI-owned `.dag-executor/` artifacts. A crashed run that leaves project changes requires inspection and is never automatically relaunched. Disable `Auto-run easy work` in the UI to keep triage enabled while requiring approval for every execution.
+
+Sequential intake currently uses the account-default Codex CLI and requires the Loom plugin to be installed. DAG proposals use the existing `loom-supervisor` queue.
 
 ```
 dag-executor <decomposition.json> [flags]
 ```
 
-| Flag                             | Default                    | Description                                                                                      |
-| -------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------ |
-| `--resume`                       | false                      | Resume a paused run from the event log                                                           |
-| `--dry-run`                      | false                      | Print estimated task costs and exit without executing                                            |
-| `--backlog`                      | false                      | Run dependency-ready tasks from the DAG as a persistent backlog instead of strict layer barriers |
-| `--slots`                        | false                      | Print machine-wide slot snapshot and exit (no DAG argument needed)                               |
-| `--model=opus\|sonnet\|haiku`    | sonnet                     | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
-| `--rerun=id1,id2`                | —                          | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
-| `--force-worktree-reset=id1,id2` | —                          | Allow clobbering unmerged branches for the listed task IDs                                       |
-| `--test-cmd=<cmd>`               | detected                   | Override the verification test command (else auto-detected from `package.json`)                  |
-| `--lint-cmd=<cmd>`               | detected                   | Override the verification lint command                                                           |
-| `--typecheck-cmd=<cmd>`          | detected                   | Override the verification typecheck command                                                      |
-| `--no-verify`                    | false                      | Disable both verification tiers entirely                                                         |
-| `--memory=<path>`                | `.dag-executor/memory.md`  | Use a specific curated project memory file for task prompts                                      |
-| `--no-memory`                    | false                      | Disable curated project memory prompt injection                                                  |
+| Flag                             | Default                   | Description                                                                                      |
+| -------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
+| `--resume`                       | false                     | Resume a paused run from the event log                                                           |
+| `--dry-run`                      | false                     | Print estimated task costs and exit without executing                                            |
+| `--backlog`                      | false                     | Run dependency-ready tasks from the DAG as a persistent backlog instead of strict layer barriers |
+| `--slots`                        | false                     | Print machine-wide slot snapshot and exit (no DAG argument needed)                               |
+| `--model=opus\|sonnet\|haiku`    | sonnet                    | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
+| `--rerun=id1,id2`                | —                         | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
+| `--force-worktree-reset=id1,id2` | —                         | Allow clobbering unmerged branches for the listed task IDs                                       |
+| `--test-cmd=<cmd>`               | detected                  | Override the verification test command (else auto-detected from `package.json`)                  |
+| `--lint-cmd=<cmd>`               | detected                  | Override the verification lint command                                                           |
+| `--typecheck-cmd=<cmd>`          | detected                  | Override the verification typecheck command                                                      |
+| `--no-verify`                    | false                     | Disable both verification tiers entirely                                                         |
+| `--memory=<path>`                | `.dag-executor/memory.md` | Use a specific curated project memory file for task prompts                                      |
+| `--no-memory`                    | false                     | Disable curated project memory prompt injection                                                  |
 
 ### Verification gates
 

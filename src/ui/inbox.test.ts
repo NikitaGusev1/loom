@@ -24,7 +24,35 @@ afterEach(() => {
 
 describe('ui inbox persistence', () => {
   it('returns an empty inbox when the file does not exist', () => {
-    assert.deepEqual(readInbox(projectDir), { schemaVersion: 1, items: [] });
+    assert.deepEqual(readInbox(projectDir), {
+      schemaVersion: 2,
+      items: [],
+      jobs: [],
+      policy: { autoRunEnabled: true, confidenceThreshold: 0.85, triageProvider: 'codex' },
+    });
+  });
+
+  it('migrates a v1 inbox on the next write without losing items', () => {
+    const path = getInboxPath(projectDir);
+    mkdirSync(dirname(path), { recursive: true });
+    const original = {
+      id: 'ui-todo-news-app',
+      createdAt: '2026-07-11T13:32:56.439Z',
+      updatedAt: '2026-07-11T13:32:56.439Z',
+      body: 'test todo - move it to done after seeing it',
+      status: 'open',
+      source: 'ui',
+      linkedDagPath: null,
+      linkedTaskId: null,
+    };
+    writeFileSync(path, JSON.stringify({ schemaVersion: 1, items: [original] }), 'utf-8');
+
+    createInboxItem(projectDir, 'Second item', { id: () => 'second', now: () => '2026-07-11T14:00:00.000Z' });
+
+    const persisted = JSON.parse(readFileSync(path, 'utf-8'));
+    assert.equal(persisted.schemaVersion, 2);
+    assert.deepEqual(persisted.items[0], original);
+    assert.equal(persisted.items[1].id, 'second');
   });
 
   it('creates the inbox file and appends generated items', () => {

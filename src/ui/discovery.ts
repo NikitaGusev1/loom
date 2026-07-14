@@ -11,7 +11,7 @@ export interface DiscoverDagsResult {
   errors: UiError[];
 }
 
-const IGNORED_DIRS = new Set([
+export const UI_IGNORED_DIRS = new Set([
   '.git',
   '.worktrees',
   'node_modules',
@@ -35,7 +35,7 @@ const walkJson = (dir: string, out: string[]): void => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (!IGNORED_DIRS.has(entry.name)) walkJson(path, out);
+      if (!UI_IGNORED_DIRS.has(entry.name)) walkJson(path, out);
       continue;
     }
     if (entry.isFile() && isCandidateDagPath(path)) out.push(path);

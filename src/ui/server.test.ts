@@ -68,8 +68,24 @@ const dagJson = () => ({
   ],
 });
 
-const withServer = async <T>(fn: (baseUrl: string) => Promise<T>): Promise<T> => {
-  const server = createUiServer({ projectPath: projectDir, slotDir, maxSlots: 2 });
+const withServer = async <T>(
+  fn: (baseUrl: string) => Promise<T>,
+  overrides: Partial<{
+    enqueueTriage: (id: string) => void;
+    clarify: (id: string, revision: number, answer: string) => void;
+    approve: (id: string, revision: number) => Promise<void>;
+    cancel: (id: string) => Promise<void>;
+  }> = {},
+): Promise<T> => {
+  const intakeService = {
+    enqueueTriage: overrides.enqueueTriage ?? (() => {}),
+    updatePolicy: (policy: { autoRunEnabled: boolean; confidenceThreshold: number; triageProvider: 'codex' }) => policy,
+    clarify: overrides.clarify ?? (() => {}),
+    approve: overrides.approve ?? (async () => {}),
+    cancel: overrides.cancel ?? (async () => {}),
+    stop: () => {},
+  };
+  const server = createUiServer({ projectPath: projectDir, slotDir, maxSlots: 2, intakeService });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   assert(address && typeof address === 'object');
@@ -144,17 +160,50 @@ describe('createUiServer', () => {
   });
 
   it('POST /api/inbox creates an inbox item', async () => {
-    await withServer(async (baseUrl) => {
-      const { response, json } = await fetchJson(baseUrl, '/api/inbox', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ body: 'Review task progress' }),
-      });
+    let triagedId = '';
+    await withServer(
+      async (baseUrl) => {
+        const { response, json } = await fetchJson(baseUrl, '/api/inbox', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ body: 'Review task progress' }),
+        });
 
-      assert.equal(response.status, 201);
-      assert.equal(json.item.body, 'Review task progress');
-      assert.equal(json.item.status, 'open');
-    });
+        assert.equal(response.status, 201);
+        assert.equal(json.item.body, 'Review task progress');
+        assert.equal(json.item.status, 'open');
+        assert.equal(triagedId, json.item.id);
+      },
+      {
+        enqueueTriage: (id) => {
+          triagedId = id;
+        },
+      },
+    );
+  });
+
+  it('exposes intake policy, runs, and triage controls', async () => {
+    let retried = '';
+    await withServer(
+      async (baseUrl) => {
+        const status = await fetchJson(baseUrl, '/api/intake/status');
+        const runs = await fetchJson(baseUrl, '/api/intake/runs');
+        const retriedResponse = await fetchJson(baseUrl, '/api/inbox/todo-1/triage', { method: 'POST' });
+
+        assert.equal(status.json.policy.autoRunEnabled, true);
+        assert.equal(runs.json.runs.length, 1);
+        assert.equal(runs.json.runs[0].mode, 'dag');
+        assert.equal(runs.json.runs[0].status, 'queued');
+        assert.equal(runs.json.runs[0].dagPath, dagPath);
+        assert.equal(retriedResponse.response.status, 202);
+        assert.equal(retried, 'todo-1');
+      },
+      {
+        enqueueTriage: (id) => {
+          retried = id;
+        },
+      },
+    );
   });
 
   it('GET and PATCH /api/inbox list and update inbox items', async () => {
@@ -215,8 +264,10 @@ describe('createUiServer', () => {
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type') ?? '', /^text\/html/);
       assert.match(html, /DAG Executor/);
-      assert.match(html, /Read-only/);
+      assert.match(html, /Local agent intake/);
       assert.match(html, /Todo inbox/);
+      assert.match(html, /Agent runs/);
+      assert.match(html, /phase-track/);
       assert.match(html, /api\/dags/);
     });
   });
