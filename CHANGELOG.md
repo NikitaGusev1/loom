@@ -12,10 +12,13 @@ Under 0.x, a MINOR bump signals a breaking CLI-surface change.
 
 ### Added
 
+- Explicit `/risk-scan` workflows for Claude and Codex. Four bounded risk lenses inspect code adjacent to a branch diff or explicit seed paths, adversarially verify concrete findings, and keep ambient project risks separate from change-gating `/code-review` results.
+- `loom-risk-helper`, a tested internal CLI for safe seed discovery, schema-v1 risk-registry validation/deduplication, legacy fingerprint compatibility, and atomic concurrent updates in the central artifact repository.
 - Prettier (pinned, `printWidth: 120`, `singleQuote`), scoped to `src/` — skills/references markdown deliberately excluded. New `lint` (check) / `format` (write) scripts; CI runs the check. Side effect: the verify-detect layer now finds a `lint` script in this repo, so self-hosted DAG runs gate spawned tasks' formatting through the Tier-1/Tier-2 gates. One-time reformat is listed in `.git-blame-ignore-revs`.
 
 ### Changed
 
+- Risk-scan registry persistence now uses an explicit schema-v1 finder projection, rejects empty evidence/path collections, matches canonical fingerprints before legacy aliases, and reports post-rename durability uncertainty and lock-release failures as distinct structured outcomes. Claude and Codex retain the same complete lens mapping and projection contract.
 - Auto-commit messages are now descriptive instead of `dag-executor: <task.id>`. New `src/executor/commit-message.ts`: per-task commits use the task `name` as subject (capped at 72 chars) + `description` as body + a `task-id: <id>` trailer; the trivial batch uses a summary subject + one bulleted `- <name> (<id>)` line per task. Deterministic — no extra model call.
 - `engines.node` raised `>=20` → `>=22`: Node 20 is EOL (2026-04-30) and its `node --test` lacks native glob expansion (the suite silently found zero tests there). No CLI-surface change.
 - CI: `actions/checkout` and `actions/setup-node` bumped v4 → v5 (v4 runs on the deprecated Node 20 runner, forced to Node 24 from 2026-06-16).

@@ -5,6 +5,7 @@
   "type": "module",
   "bin": {
     "dag-executor": "./build/index.js",
+    "loom-risk-helper": "./build/risk-scan/cli.js",
     "loom-day-run": "./scripts/loom-supervisor.cjs",
     "loom-status": "./scripts/loom-supervisor.cjs",
     "loom-supervisor": "./scripts/loom-supervisor.cjs"

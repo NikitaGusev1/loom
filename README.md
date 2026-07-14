@@ -27,6 +27,7 @@ Verify from any directory:
 
 ```sh
 dag-executor --slots
+loom-risk-helper --help
 loom-day-run --help
 loom-supervisor --help
 ```
@@ -37,7 +38,7 @@ After pulling changes: `npm run build` (the linked binary points at `build/index
 
 ### 2. Claude Code plugin
 
-Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/cleanup`, `/code-review`, `/decompose`, `/implement-dag`, the `plan-reviewer` / `review-finder` / `review-verifier` / `task-decomposer` / `code-simplifier` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
+Ships the orchestration surface: `/auto-implement`, `/auto-run`, `/auto-step`, `/cleanup`, `/code-review`, `/risk-scan`, `/decompose`, `/implement-dag`, the review/risk finder and verifier agents, the `plan-reviewer` / `task-decomposer` / `code-simplifier` agents, the headless supervisor scripts, and the `dag-checkpoint` / `dag-auto-run-supervisor` helpers (added to the Bash tool's PATH while the plugin is enabled).
 
 `/auto-implement` defaults to the **supervised** flow (backgrounds the supervisor, one fresh context per phase, chat just monitors gates); pass `--inline` for the monolithic in-session engine — the only substrate that runs sequential (`/implement-plan`) plans.
 
@@ -58,6 +59,7 @@ The Codex-native plugin bundle lives under `codex/plugins/loom`. It ports the tw
 
 - `/simplify` — behavior-preserving simplification of the current diff.
 - `/code-review` — comprehensive diff review with a structured report in `.claude/ai/`.
+- `/risk-scan` — explicit, bounded inspection of adjacent project code with durable reports and a deduplicated central risk registry.
 
 Install the local marketplace once from this repo:
 
@@ -67,6 +69,58 @@ codex plugin add loom@loom-local
 ```
 
 Start a new Codex thread after installing or updating the plugin so the slash-command surface is reloaded.
+
+### Explicit risk scanning
+
+`/risk-scan` is separate from change-gating code review. It uses changed files as seeds, follows direct callers, dependencies, shared contracts, and one analogous implementation within a two-hop boundary, then inspects that neighborhood through integration, reliability, trust-boundary, and maintainability lenses. It never runs automatically from `/auto-implement`, `/auto-run`, or `/code-review`.
+
+```text
+/risk-scan
+/risk-scan --base origin/main
+/risk-scan --paths src/executor.ts,src/contracts.ts
+/risk-scan --paths src/executor.ts --report-only
+```
+
+Without `--paths`, committed branch changes plus staged, unstaged, and untracked non-ignored files provide the seeds. A clean repository is a successful no-op, not a whole-repository audit. `--report-only` writes the immutable scan report without changing the registry.
+
+Durable output is stored outside the target repository under `${LOOM_ARTIFACTS_DIR:-/Users/nikita/Desktop/repos/dag-executor-artifacts}/projects/<project-slug>/risk-register/`:
+
+- `risk-YYYY-MM-DD-<scan-slug>.md` — immutable evidence for one scan; collisions receive a unique UTC/scan-ID suffix.
+- `registry.json` — schema-versioned findings deduplicated across scans while preserving human `accepted`, `fixed`, and `dismissed` statuses.
+
+The internal `loom-risk-helper` binary provides deterministic Git seed discovery and race-safe registry updates for both plugin surfaces. Its stdout is machine-readable JSON; diagnostics are written to stderr.
+
+Before `registry-merge`, the orchestrator projects only converged, non-rejected ambient findings into this strict schema-v1 candidate envelope:
+
+```json
+{
+  "schemaVersion": 1,
+  "projectSlug": "<slug>",
+  "entries": [
+    {
+      "lens": "integration",
+      "kind": "risk",
+      "severity": "high",
+      "confidence": "medium",
+      "status": "open",
+      "title": "<title>",
+      "evidence": ["<evidence>"],
+      "affectedPaths": ["<repository-relative-path>"],
+      "seedRelationship": "<relationship>",
+      "failureScenario": "<scenario>",
+      "suggestedAction": "<action>",
+      "primaryAnchor": "<optional-anchor>",
+      "rootCause": "<optional-root-cause>"
+    }
+  ]
+}
+```
+
+Lens codes map as `I` to `integration`, `R` to `reliability`, `B` to `trust-boundaries`, and `M` to `maintainability`. `kind` is `bug | risk | improvement`; severity is `critical | high | medium | low`; confidence is reduced to `high | medium | low`; optional status is `open | deferred`. `evidence` and `affectedPaths` must each contain at least one non-empty string. Change-review candidates and rejected findings are never projected.
+
+The projection omits finder `temporaryId`, `fingerprintInputs`, `disposition`, confidence rationale, verifier outcome/reason, hop metadata not represented by `seedRelationship`, and all other orchestration-only or report-only fields. Registry identity matches the generated `rs1:` fingerprint first. Semantic alias matching is fallback-only for entries with legacy non-`rs1:` fingerprints, which retain their stored fingerprint when refreshed.
+
+Registry persistence distinguishes pre-rename `write-failed` from two post-operation outcomes: `durability-uncertain` means the atomic rename completed but parent-directory sync failed, so new bytes may already be visible and validation/idempotent retry is required; `lock-release-failed` means the operation otherwise completed but its owned lock could not be released. Both are reported as structured persistence failures without modifying the immutable scan report.
 
 ---
 

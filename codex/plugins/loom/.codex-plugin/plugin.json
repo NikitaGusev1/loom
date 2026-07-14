@@ -1,7 +1,7 @@
 {
   "name": "loom",
-  "version": "0.1.0+codex.20260711071728",
-  "description": "Codex-native Loom and dag-executor skills for exploration, planning, decomposition, implementation, cleanup, review, and supervised runs.",
+  "version": "0.1.0+codex.20260714173905",
+  "description": "Codex-native Loom and dag-executor skills for exploration, planning, decomposition, implementation, cleanup, review, explicit risk scanning, and supervised runs.",
   "author": {
     "name": "Nikita Gusev",
     "email": "nikita.gusev@visma.com"
@@ -15,13 +15,14 @@
     "loom",
     "planning",
     "code-review",
+    "risk-scan",
     "automation"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Loom",
     "shortDescription": "Use Loom and dag-executor workflows in Codex",
-    "longDescription": "Loom provides Codex-native skills for exploring feature ideas, writing specs and plans, decomposing work into DAGs, running supervised implementations, cleaning up changes, simplifying code, and running fan-out code review with verified findings.",
+    "longDescription": "Loom provides Codex-native skills for exploring feature ideas, writing specs and plans, decomposing work into DAGs, running supervised implementations, cleaning up changes, simplifying code, running fan-out code review, and explicitly scanning adjacent project code for verified risks.",
     "developerName": "Nikita Gusev",
     "category": "Developer Tools",
     "capabilities": [
@@ -32,7 +33,8 @@
       "Explore this feature idea and write a spec.",
       "Create a plan from the latest spec.",
       "Decompose this plan into a DAG.",
-      "Run cleanup, then code review."
+      "Run cleanup, then code review.",
+      "Risk scan the code adjacent to these changes."
     ],
     "brandColor": "#2563EB",
     "screenshots": []

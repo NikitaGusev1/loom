@@ -1,5 +1,5 @@
 ---
-description: Interactive design dialogue with on-demand codebase research. Produces a structured spec document ready for /plan-from-spec consumption. Use when starting new work, exploring a feature idea, or when you need to think through what to build before planning.
+description: Interactive design dialogue with on-demand codebase research. This is Loom's sole normal human approval step: after spec approval it automatically plans and launches autonomous implementation. Use when starting new work, exploring a feature idea, or when you need to think through what to build before implementation.
 argument-hint: [initial prompt or Figma URL]
 phase: research
 ---
@@ -208,7 +208,7 @@ After all sections are approved, gather metadata and write the spec:
 date: [ISO timestamp with timezone]
 author: Claude
 type: spec
-status: draft
+status: approved
 git_commit: [current commit hash]
 branch: [current branch]
 repository: [repository name from git remote]
@@ -313,8 +313,9 @@ Approve unless there are serious gaps that would lead to a flawed plan.
 2. If **Issues Found**: Fix the issues in the spec, re-dispatch the reviewer
 3. **Max 3 iterations** — if still failing after 3, present remaining issues to the user for guidance
 
-After fixing issues, update the spec's `status` frontmatter to `review`.
-After review passes, update to `complete`.
+While automated review is in progress, use `status: review`. After review passes, restore
+`status: approved`; the downstream pipeline treats the user's Step 8 approval as authorization
+for both planning and implementation.
 
 ## Step 8: User Review Gate
 
@@ -335,12 +336,16 @@ Wait for the user's response:
 After user approval:
 
 ```
-Spec approved. Ready to create the implementation plan.
-
-Run: `/plan-from-spec [spec path]`
+Spec approved. Continuing automatically through planning and implementation.
 ```
 
-Do NOT automatically invoke `/plan-from-spec`. Present the skill for the user to run when ready.
+1. Ensure the spec frontmatter says `status: approved`.
+2. Invoke `/plan-from-spec [spec path] --auto-implement` immediately.
+3. Do not ask for separate plan approval, plan-reviewer approval, execution-mode selection, or
+   implementation approval. The approved spec is the authorization for these downstream steps.
+4. Default the implementation handoff to autonomous mode.
+5. Pause only when the downstream pipeline reaches an explicit hard stop or safety guardrail that
+   cannot be resolved automatically. Surface that exception with the evidence and required choice.
 
 ## Important Notes
 
@@ -354,3 +359,4 @@ Do NOT automatically invoke `/plan-from-spec`. Present the skill for the user to
 - **ALWAYS transform the prompt first** (Step 1) before any research
 - **ALWAYS do the light orientation** (Step 2) before asking questions
 - **NEVER write the spec with unresolved open questions**
+- **After spec approval, continue automatically** — exploration is the only normal human gate

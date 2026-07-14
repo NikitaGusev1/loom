@@ -1,6 +1,6 @@
 ---
-description: Creates an implementation plan from an existing spec document, skipping redundant codebase research. Use when you've already run /explore and want to go straight to planning without re-discovering what was already found.
-argument-hint: <spec-path> [figma-url]
+description: Creates an approved implementation plan from an existing approved spec, skipping redundant research. When called by /explore with --auto-implement, it continues directly into autonomous implementation without another human gate.
+argument-hint: <spec-path> [figma-url] [--auto-implement]
 phase: planning
 ---
 
@@ -20,6 +20,8 @@ Parse from `$ARGUMENTS`:
 - **Spec path** (required): Path to a `.claude/ai/spec-*.md` file
 - **Figma URL** (optional): Figma design URL to analyze alongside the spec
 - **Jira ticket** (optional): Jira ticket key (e.g., `VMM-1234`) for additional acceptance criteria
+- **Auto implement** (optional): `--auto-implement` marks the generated plan approved and immediately
+  invokes `/auto-implement <plan-path> --mode autonomous`. This is the standard `/explore` handoff.
 
 If no spec path is provided, search `.claude/ai/` for the most recent `spec-*.md` file and confirm with the user.
 
@@ -54,7 +56,7 @@ Compare what the spec covers against what's needed for a plan:
 
 **Specs from `/explore` are typically comprehensive** — expect gaps to be small or nonexistent. Common gaps: a Figma URL that wasn't explored during the dialogue, or a specific data flow for the chosen approach that wasn't traced.
 
-### Step 3: Present Understanding
+### Step 3: Confirm Understanding When Needed
 
 Present your understanding to the user, combining spec content with any gap-filling:
 
@@ -71,9 +73,11 @@ Based on the spec:
 Ready to plan. Any adjustments before I proceed?
 ```
 
-Get alignment before proceeding.
+When `--auto-implement` is set, do not present this checkpoint or ask for alignment. The user
+already approved the source spec in `/explore`; continue unless a newly discovered contradiction
+would materially change that approved design. Without the flag, get alignment before proceeding.
 
-### Step 3.5: Solicit Known Pitfalls
+### Step 3.5: Solicit Known Pitfalls When Needed
 
 Before structuring the plan, ask the user for domain knowledge that prevents wrong-approach spirals:
 
@@ -89,6 +93,8 @@ If nothing comes to mind, that's fine — I'll proceed.
 
 If the user provides constraints, fold them into the relevant phase notes so the implementing session sees them inline with the work they apply to.
 
+Skip this prompt when `--auto-implement` is set. `/explore` already solicited known pitfalls.
+
 ### Step 4: Structure the Plan
 
 From here, follow the same plan-writing process as `/create-plan` Step 5 — structure the work into sequential implementation phases directly from the spec's acceptance criteria and codebase context:
@@ -98,12 +104,17 @@ From here, follow the same plan-writing process as `/create-plan` Step 5 — str
 3. **Fold in pitfalls and constraints** from Step 3.5 as notes on the phases they apply to.
 4. **Run quality checks** on the structured plan — confirm each phase has clear scope, the phases cover every acceptance criterion (Coverage), and dependencies between phases are explicit and correctly ordered. Revise (max 3 iterations) if a check fails.
 5. **Write the plan** — use the same plan template as `/create-plan`, but add `spec_path` to the YAML frontmatter pointing to the spec document used as input (e.g., `spec_path: ".claude/ai/spec-2026-03-26-feature.md"`).
-6. **Save the plan** to `.claude/ai/plan-YYYY-MM-DD-description.md`.
-7. **Iterate** based on user feedback.
+6. **Save the plan** to `.claude/ai/plan-YYYY-MM-DD-description.md`. Use `status: approved`
+   when `--auto-implement` is set; otherwise use `status: draft`.
+7. **Iterate** based on user feedback only in interactive mode.
 
 ### Step 5: Optional — Run Plan Reviewer
 
-After the plan is saved, ask the user:
+After the plan is saved, run the plan reviewer automatically when `--auto-implement` is set.
+Apply focused, non-design-changing corrections and re-run it, up to 3 times. If the reviewer still
+reports a fatal issue or fixing it would change the approved design, stop and show the exception.
+
+Without `--auto-implement`, ask the user:
 
 ```
 Plan saved. Would you like me to run the plan-reviewer agent to validate it against the codebase before implementation?
@@ -111,7 +122,14 @@ Plan saved. Would you like me to run the plan-reviewer agent to validate it agai
 
 If yes, spawn the **plan-reviewer** agent with the plan path and spec path.
 
-Once the plan is saved (and optionally reviewed), hand it off to `/implement-plan` to execute the phases.
+When `--auto-implement` is set and review passes, invoke:
+
+```
+/auto-implement [plan path] --mode autonomous
+```
+
+Do not ask for plan approval or implementation confirmation. The pipeline may still pause at its
+documented hard stops and safety guardrails. Without the flag, hand the saved plan back to the user.
 
 ## Key Differences
 

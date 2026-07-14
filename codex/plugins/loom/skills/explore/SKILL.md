@@ -1,11 +1,12 @@
 ---
 name: explore
-description: "Explore and shape a feature or change before implementation. Use when the user wants to investigate an idea, compare approaches, turn rough requirements into a spec, or port Claude /explore behavior to Codex."
+description: "Explore and shape a feature or change, then automatically plan and implement it after the user approves the spec. This is Loom's sole normal manual step; downstream work pauses only for hard stops and safety guardrails."
 ---
 
 # Explore
 
-Run an interactive design-and-research pass for a proposed change. The output is a spec that can feed `plan-from-spec`.
+Run an interactive design-and-research pass for a proposed change. Once the user approves the spec,
+continue automatically through planning and autonomous implementation.
 
 ## Artifact Repository
 
@@ -21,6 +22,11 @@ Before reading or writing specs, load `../../references/artifact-repository.md`.
 3. Present 2-3 viable approaches with tradeoffs and a recommendation.
 4. After the user approves a direction, write the durable spec at `projects/<project-slug>/specs/spec-YYYY-MM-DD-description.md` in the central artifact repo. Also copy it to `.claude/ai/` only when the next tool requires a project-local path.
 5. Include enough codebase context that `plan-from-spec` can plan without repeating broad research.
+6. Treat approval of the spec as authorization for the downstream implementation pipeline. Invoke
+   `plan-from-spec` with the spec path and `--auto-implement`; do not ask for another plan or
+   implementation approval.
+7. Pause downstream only for an explicit hard stop or safety guardrail that cannot be resolved
+   automatically. Report the evidence and the decision required.
 
 ## Spec Shape
 
