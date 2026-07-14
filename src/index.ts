@@ -21,6 +21,7 @@ import { metricsFromFiles, renderMetricsHuman } from './metrics.js';
 import { checkSelfHostStaleness } from './self-host-guard.js';
 import { analyzeDAGReadiness, formatDAGReadinessReport } from './dag-readiness.js';
 import { archiveRun } from './corpus.js';
+import { createUiServer } from './ui/server.js';
 
 const log = createLogger();
 
@@ -52,9 +53,12 @@ const noOpen = args.includes('--no-open');
 const humanFlag = args.includes('--human');
 const readinessFlag = args.includes('--dag-readiness');
 const skipDagReadiness = args.includes('--skip-dag-readiness');
+const uiFlag = args.includes('--ui');
 const allowStaleSelfHost = args.includes('--allow-stale-self-host');
 const getArgValue = (name: string): string | undefined => args.find((a) => a.startsWith(`${name}=`))?.split('=')[1];
 const providerArg = getArgValue('--provider');
+const projectArg = getArgValue('--project');
+const portArg = getArgValue('--port');
 
 const diffHtmlPath = (path: string): string =>
   path.endsWith('.json') ? path.replace(/\.json$/, '.diff.html') : `${path}.diff.html`;
@@ -192,12 +196,34 @@ if (readinessFlag) {
   }
 }
 
+if (uiFlag) {
+  const projectPath = resolve(projectArg ?? dagPath ?? process.cwd());
+  const port = portArg === undefined ? 0 : Number(portArg);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    log.error(`Invalid --port=${portArg}. Expected an integer from 0 to 65535.`);
+    process.exit(1);
+  }
+
+  const server = createUiServer({ projectPath });
+  server.listen(port, '127.0.0.1', () => {
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      log.error('DAG UI failed to determine its listen address.');
+      process.exit(1);
+    }
+    console.log(`DAG UI listening on http://127.0.0.1:${address.port}`);
+  });
+  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+  await new Promise(() => undefined);
+}
+
 if (!dagPath) {
   log.error(
     [
       'Usage: dag-executor <decomposition.json>',
       '  [--resume] [--dry-run] [--backlog] [--slots] [--decomposition-stats] [--dag-readiness]',
       '  [--metrics <log...> [--human]] [--diff-view <dag> [--no-open]]',
+      '  --ui [--project=<path>] [--port=<port>]',
       '  [--provider=codex|claude] [--model=codex|default|gpt5|mini|opus|sonnet|haiku|<model>]',
       '  [--rerun=id1,id2]',
       '  [--force-worktree-reset=id1,id2] [--allow-stale-self-host]',

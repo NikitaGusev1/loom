@@ -6,6 +6,7 @@ export interface CodexStreamOptions {
   model: string;
   cwd?: string;
   signal?: AbortSignal;
+  onOutput?: (line: string) => void;
 }
 
 interface ParsedCodexEvent {
@@ -172,6 +173,7 @@ export const runCodexCli = async (
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        options.onOutput?.(trimmed);
         const event = parseJsonLine(trimmed);
         if (!event) continue;
         sawJson = true;
@@ -182,6 +184,7 @@ export const runCodexCli = async (
     }
 
     if (stdoutRemainder.trim()) {
+      options.onOutput?.(stdoutRemainder.trim());
       const event = parseJsonLine(stdoutRemainder.trim());
       if (event) {
         sawJson = true;
