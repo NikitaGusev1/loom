@@ -116,6 +116,14 @@ describe('createUiServer', () => {
       assert.equal(response.status, 200);
       assert.equal(json.projectPath, projectDir);
       assert.equal(json.dagCount, 1);
+      assert.deepEqual(json.git, {
+        isRepository: false,
+        branch: null,
+        clean: false,
+        changedFiles: 0,
+        ahead: 0,
+        behind: 0,
+      });
       assert.deepEqual(json.slots, { maxSlots: 2, holders: [], waiters: [] });
       assert.deepEqual(json.errors, []);
     });
@@ -265,10 +273,14 @@ describe('createUiServer', () => {
       assert.match(response.headers.get('content-type') ?? '', /^text\/html/);
       assert.match(html, /DAG Executor/);
       assert.match(html, /Local agent intake/);
+      assert.match(html, /gitStatus/);
       assert.match(html, /Todo inbox/);
       assert.match(html, /Agent runs/);
       assert.match(html, /phase-track/);
       assert.match(html, /api\/dags/);
+      assert.match(html, /compact\(d\.description,96\)/);
+      assert.match(html, /compact\(t\?\.summary\|\|i\.body,120\)/);
+      assert.doesNotMatch(html, /esc\(t\.rationale\)/);
     });
   });
 

@@ -109,6 +109,16 @@ export interface UiTaskDetail {
 export interface UiProjectSummary {
   projectPath: string;
   dagCount: number;
+  git: UiGitStatus;
   slots: SlotsScan;
   errors: UiError[];
+}
+
+export interface UiGitStatus {
+  isRepository: boolean;
+  branch: string | null;
+  clean: boolean;
+  changedFiles: number;
+  ahead: number;
+  behind: number;
 }

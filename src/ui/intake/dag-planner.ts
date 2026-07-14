@@ -22,7 +22,7 @@ const within = (projectPath: string, path: string): string => {
 
 export class CodexDagPlanner implements DagPlanner {
   async propose(projectPath: string, item: UiInboxItem, triage: UiTriageResult): Promise<DagProposal> {
-    const prompt = `Use loom:explore only if clarification is needed, then loom:plan-from-spec and loom:decompose to create an approved plan and validated DAG for this project request. Do not implement it. Return JSON only as {"planPath":"...","dagPath":"..."}. Request: ${JSON.stringify(item.body)}. Triage: ${JSON.stringify(triage)}`;
+    const prompt = `Use loom:explore only if clarification is needed, then loom:plan-from-spec and loom:decompose to create an approved plan and validated DAG for this project request. Do not implement it. Loom may also keep durable copies in its central artifact repository, but the UI requires project-local artifacts: copy or reuse the final plan and DAG under this project's .claude/ai directory and return those project-local paths. Return JSON only as {"planPath":"...","dagPath":"..."}. Request: ${JSON.stringify(item.body)}. Triage: ${JSON.stringify(triage)}`;
     const result = await runCodexCli(prompt, { model: 'account-default', cwd: projectPath });
     const parsed = JSON.parse(result.trace.lastAssistantText) as DagProposal;
     const proposal = { planPath: within(projectPath, parsed.planPath), dagPath: within(projectPath, parsed.dagPath) };

@@ -7,6 +7,7 @@ import { UI_HTML } from './assets.js';
 import { discoverDags } from './discovery.js';
 import { archiveInboxItem, createInboxItem, readInbox, updateInboxItemStatus } from './inbox.js';
 import { loadDagDetail, loadTaskDetail } from './projection.js';
+import { readGitStatus } from './git-status.js';
 import type { UiError, UiInboxStatus } from './types.js';
 import { IntakeService } from './intake/service.js';
 import { loadRunDetail, listRuns } from './intake/projection.js';
@@ -118,6 +119,7 @@ export const createUiServer = (options: UiServerOptions): Server => {
         json(res, 200, {
           projectPath,
           dagCount: discovered.dags.length,
+          git: readGitStatus(projectPath),
           slots: scanSlots(slotDir, maxSlots),
           errors: discovered.errors,
         });
