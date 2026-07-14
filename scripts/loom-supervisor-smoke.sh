@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPERVISOR="${SCRIPT_DIR}/loom-supervisor.cjs"
 
 TMP_DIR="$(mktemp -d -t loom-supervisor-smoke-XXXXXX)"
+export LOOM_SUPERVISOR_CREATE_PR=0
 
 cleanup() {
   if [[ -z "${SMOKE_KEEP_TMP:-}" ]]; then
@@ -305,6 +306,61 @@ run_case() {
 run_case completed 0 $'0'
 assert_eq 'completed: status' completed "$(json_get "$CASE_CKPT" status)"
 assert_eq 'completed: attempts' 1 "$(json_get "$CASE_CKPT" attempts)"
+assert_eq 'completed: PR disabled' disabled "$(node -e 'const fs=require("fs"); const o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(o.pullRequest?.status || "");' "$CASE_CKPT")"
+
+GH_STUB="${TMP_DIR}/gh-stub.sh"
+GH_INV="${TMP_DIR}/gh-inv.log"
+cat >"$GH_STUB" <<'GH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${GH_INV:?GH_INV required}"
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'gh version smoke\n'
+elif [[ "${1:-} ${2:-}" == "pr list" ]]; then
+  printf '[]\n'
+elif [[ "${1:-} ${2:-}" == "pr create" ]]; then
+  printf 'https://example.test/pull/42\n'
+fi
+GH
+chmod +x "$GH_STUB"
+
+PR_DIR="${TMP_DIR}/create_pr"
+PR_REMOTE="${TMP_DIR}/create-pr-remote.git"
+mkdir -p "$PR_DIR"
+git init -q --bare "$PR_REMOTE"
+(
+  cd "$PR_DIR"
+  git init -q -b main
+  git config user.name 'Loom Smoke'
+  git config user.email 'loom-smoke@example.test'
+  printf 'base\n' >app.txt
+  git add app.txt
+  git commit -qm 'base'
+  git remote add origin "$PR_REMOTE"
+  git push -q -u origin main
+  printf 'implementation\n' >>app.txt
+  git add app.txt
+  git commit -qm 'implement smoke DAG'
+  write_smoke_dag "$PR_DIR/dag.json"
+  printf '0\n' >"$PR_DIR/plan.tsv"
+  : >"$PR_DIR/inv.log"
+  GH_INV="$GH_INV" \
+  GH_BIN="$GH_STUB" \
+  DAG_EXECUTOR_BIN="$STUB" \
+  CODEX_BIN="$CODEX_STUB" \
+  STUB_PLAN="$PR_DIR/plan.tsv" \
+  STUB_INV="$PR_DIR/inv.log" \
+  STUB_COUNT="$PR_DIR/count" \
+  LOOM_SUPERVISOR_CHECKPOINT="$PR_DIR/ckpt.json" \
+  LOOM_SUPERVISOR_LOG_DIR="$PR_DIR/logs" \
+  LOOM_SUPERVISOR_CREATE_PR=1 \
+  LOOM_SUPERVISOR_GH_BIN="$GH_STUB" \
+  node "$SUPERVISOR" --allow-dirty-repo "$PR_DIR/dag.json" --provider=codex >/dev/null 2>&1
+)
+assert_eq 'create_pr: status' completed "$(json_get "$PR_DIR/ckpt.json" status)"
+assert_eq 'create_pr: URL recorded' 'https://example.test/pull/42' "$(node -e 'const fs=require("fs"); const o=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(o.pullRequest?.url || "");' "$PR_DIR/ckpt.json")"
+assert_contains 'create_pr: gh create invoked' 'pr create' "$GH_INV"
+assert_contains 'create_pr: loom branch pushed' 'refs/heads/loom/smoke-' <(git --git-dir="$PR_REMOTE" show-ref)
 
 run_case lumpy_backlog 0 $'0' write_lumpy_dag
 

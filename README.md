@@ -431,10 +431,12 @@ loom-day-run <dagPath> --provider=codex
 
 `loom-day-run` starts a detached `loom-supervisor` process. The supervisor runs `dag-executor <dagPath> --backlog`, then supervises the run:
 
-- completed DAG exits `0`
+- completed DAG creates or reuses a `loom/<dag>-<sha>` feature branch, pushes it, opens a GitHub PR, records the URL in the checkpoint, and exits `0`
 - quota / usage-limit pauses wait and retry with `--resume`, preferring `dag.paused.quota.resetAt` / `retryAfterMs` when available
 - process crashes wait and restart with `--resume`
 - ordinary pauses such as merge conflicts or verification failures stop with exit `2`
+
+Automatic PR creation requires an authenticated GitHub CLI (`gh`). Pass `--no-create-pr` (or set `LOOM_SUPERVISOR_CREATE_PR=0`) when a run should stop after merging the DAG commits. `LOOM_SUPERVISOR_PR_BASE` and `LOOM_SUPERVISOR_PR_REMOTE` override the DAG base branch and the default `origin` remote.
 
 The supervisor writes a checkpoint next to the DAG at `<dag>.supervisor.json`, including `nextRunAt` for waits and quota metadata when available. It writes the detached supervisor log at `<dag-dir>/.loom-supervisor/supervisor.log`, and logs attempts under `<dag-dir>/.loom-supervisor/logs/`.
 
@@ -446,7 +448,7 @@ loom-supervisor <dagPath> --provider=codex
 
 Detached runs refuse to start a second active supervisor for the same DAG. Use `--force-detach` only after checking the old PID is stale.
 
-Before starting, the supervisor runs preflight checks: DAG JSON validation, `dag-executor` / provider CLI / `git` availability, stale DAG lock and supervisor PID detection, a git worktree creation probe, dirty-repo detection, and a cheap provider `--version` smoke check. Dirty repos are blocked by default; pass `--allow-dirty-repo` only when the current working tree state is intentional.
+Before starting, the supervisor runs preflight checks: DAG JSON validation, `dag-executor` / provider CLI / `git` / `gh` availability, stale DAG lock and supervisor PID detection, a git worktree creation probe, dirty-repo detection, and a cheap provider `--version` smoke check. Dirty repos are blocked by default; pass `--allow-dirty-repo` only when the current working tree state is intentional.
 
 Stop a detached run:
 
@@ -461,7 +463,7 @@ loom-status <dagPath>
 # or: loom-supervisor --status <dagPath>
 ```
 
-Status output includes the supervisor state, attempt number, last exit code, last attempt log, next retry time, latest pause reason, and DAG task counts. It exits non-zero when the checkpoint is missing or the run is blocked.
+Status output includes the supervisor state, attempt number, last exit code, last attempt log, next retry time, latest pause reason, PR status/URL, and DAG task counts. It exits non-zero when the checkpoint is missing or the run is blocked.
 
 ### Multi-DAG queue
 

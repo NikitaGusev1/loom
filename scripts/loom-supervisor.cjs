@@ -12,7 +12,7 @@ const DEFAULT_MAX_ATTEMPTS = 100;
 const DEFAULT_CRASH_DELAY_SEC = 60;
 const DEFAULT_CRASH_DELAY_MAX_SEC = 15 * 60;
 const DEFAULT_QUOTA_DELAY_SEC = 30 * 60;
-const ACTIVE_CHECKPOINT_STATUSES = new Set(['running', 'waiting', 'starting', 'stopping']);
+const ACTIVE_CHECKPOINT_STATUSES = new Set(['running', 'waiting', 'starting', 'stopping', 'creating-pr']);
 const QUEUE_INCOMPLETE_STATUSES = new Set(['queued', 'running', 'paused', 'stopped', 'failed']);
 const TASK_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const ESTIMATED_SCOPES = new Set(['single-component', 'multi-file', 'cross-module']);
@@ -43,6 +43,8 @@ Day-run behavior:
   - --force-detach ignores a stale-looking active checkpoint
   - --foreground disables loom-day-run's implicit --detach
   - --allow-dirty-repo permits starting when git status is dirty
+  - successful DAGs push their commits and open a GitHub PR by default
+  - --no-create-pr disables automatic PR creation
   - --status prints checkpoint + DAG task status
   - --stop sends SIGTERM to the PID in the checkpoint
   - --queue=<path> selects a persistent multi-DAG queue file
@@ -64,7 +66,11 @@ Environment:
   LOOM_SUPERVISOR_MAX_ATTEMPTS      default: 100
   LOOM_SUPERVISOR_CRASH_DELAY_SEC   default: 60
   LOOM_SUPERVISOR_CRASH_DELAY_MAX_SEC default: 900
-  LOOM_SUPERVISOR_QUOTA_DELAY_SEC   default: 1800`);
+  LOOM_SUPERVISOR_QUOTA_DELAY_SEC   default: 1800
+  LOOM_SUPERVISOR_CREATE_PR         default: 1 (set 0 to disable)
+  LOOM_SUPERVISOR_PR_BASE           default: DAG meta.branch
+  LOOM_SUPERVISOR_PR_REMOTE         default: origin
+  LOOM_SUPERVISOR_GH_BIN            default: gh`);
 }
 
 function envInt(name, fallback) {
@@ -252,6 +258,7 @@ function parseArgs(argv) {
     forceDetach: false,
     foreground: false,
     allowDirtyRepo: false,
+    createPr: true,
     status: false,
     stop: false,
     queueAdd: false,
@@ -273,6 +280,8 @@ function parseArgs(argv) {
     else if (arg === '--force-detach') flags.forceDetach = true;
     else if (arg === '--foreground') flags.foreground = true;
     else if (arg === '--allow-dirty-repo') flags.allowDirtyRepo = true;
+    else if (arg === '--create-pr') flags.createPr = true;
+    else if (arg === '--no-create-pr') flags.createPr = false;
     else if (arg === '--status') flags.status = true;
     else if (arg === '--stop') flags.stop = true;
     else if (arg === '--queue-add') flags.queueAdd = true;
@@ -434,7 +443,7 @@ function validatePriority(priority) {
   return priority;
 }
 
-function addQueueItem({ queuePath, dagArg, userArgs, priority, allowDirtyRepo }) {
+function addQueueItem({ queuePath, dagArg, userArgs, priority, allowDirtyRepo, createPr }) {
   if (!dagArg) {
     console.error('[loom-supervisor] --queue-add requires a DAG path');
     return 1;
@@ -453,11 +462,19 @@ function addQueueItem({ queuePath, dagArg, userArgs, priority, allowDirtyRepo })
     return 1;
   }
 
+  const repoRootProbe = runProbe('git', ['rev-parse', '--show-toplevel']);
+  if (repoRootProbe.status !== 0) {
+    console.error(`[loom-supervisor] queue add failed: ${resultFailure(repoRootProbe)}`);
+    return 1;
+  }
+
   const item = {
     id: queueItemId(dagPath),
     dagPath,
+    repoRoot: String(repoRootProbe.stdout || '').trim(),
     args: userArgs,
     allowDirtyRepo,
+    createPr,
     priority: validatePriority(priority),
     status: 'queued',
     createdAt: nowIso(),
@@ -657,11 +674,16 @@ async function runQueueWorker({ queuePath }) {
 
     const childArgs = [__filename];
     if (item.allowDirtyRepo) childArgs.push('--allow-dirty-repo');
+    if (item.createPr === false) childArgs.push('--no-create-pr');
     childArgs.push(item.dagPath, ...(item.args || []));
     console.error(`[loom-supervisor] queue item=${item.id} node ${childArgs.join(' ')}`);
 
     const result = await new Promise((resolve) => {
-      const child = spawn(process.execPath, childArgs, { stdio: 'inherit', env: queueChildEnv() });
+      const child = spawn(process.execPath, childArgs, {
+        cwd: item.repoRoot || process.cwd(),
+        stdio: 'inherit',
+        env: queueChildEnv(),
+      });
       signalState.child = child;
       if (isPositiveInteger(child.pid)) {
         markQueueItemSupervisor({ queuePath, itemId: item.id, supervisorPid: child.pid });
@@ -1038,6 +1060,119 @@ function resultFailure(result) {
   return resultOutput(result) || result.error?.message || 'unknown error';
 }
 
+function requireSuccessfulProbe(command, args, options = {}) {
+  const result = runProbe(command, args, options);
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(' ')} failed: ${resultFailure(result)}`);
+  }
+  return String(result.stdout || '').trim() || resultOutput(result);
+}
+
+function slugify(value, fallback = 'dag') {
+  const slug = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return slug || fallback;
+}
+
+function githubBin() {
+  return process.env.LOOM_SUPERVISOR_GH_BIN || 'gh';
+}
+
+function pullRequestBody(dag) {
+  const tasks = Array.isArray(dag?.tasks) ? dag.tasks : [];
+  const taskLines = tasks
+    .slice(0, 8)
+    .map((task) => `- ${String(task?.name || task?.id || 'Completed task').trim()}`)
+    .join('\n');
+  const overflow = tasks.length > 8 ? `\n- ${tasks.length - 8} more DAG task(s)` : '';
+  const summary = taskLines || `- ${String(dag?.meta?.source?.title || 'Completed DAG implementation').trim()}`;
+  return `## Summary\n${summary}${overflow}\n\n## Loom\n- DAG: ${dag?.meta?.id || 'unknown'}\n- Tasks completed: ${tasks.length}\n`;
+}
+
+function existingPullRequest({ repoRoot, baseBranch, headBranch }) {
+  const output = requireSuccessfulProbe(
+    githubBin(),
+    [
+      'pr',
+      'list',
+      '--state',
+      'open',
+      '--base',
+      baseBranch,
+      '--head',
+      headBranch,
+      '--limit',
+      '1',
+      '--json',
+      'number,title,url',
+    ],
+    { cwd: repoRoot, timeoutMs: 30_000 },
+  );
+  const prs = output ? JSON.parse(output) : [];
+  return Array.isArray(prs) ? prs[0] : undefined;
+}
+
+function createPullRequest({ dagPath }) {
+  const dag = readJson(dagPath);
+  if (!dag) throw new Error(`cannot read DAG for PR creation: ${dagPath}`);
+
+  const repoRoot = requireSuccessfulProbe('git', ['rev-parse', '--show-toplevel']);
+  const remote = process.env.LOOM_SUPERVISOR_PR_REMOTE || 'origin';
+  const baseBranch = String(process.env.LOOM_SUPERVISOR_PR_BASE || dag?.meta?.branch || 'main').trim();
+  const headSha = requireSuccessfulProbe('git', ['rev-parse', '--short=10', 'HEAD'], { cwd: repoRoot });
+  let headBranch = requireSuccessfulProbe('git', ['branch', '--show-current'], { cwd: repoRoot });
+
+  if (!headBranch || headBranch === baseBranch) {
+    headBranch = `loom/${slugify(dag?.meta?.id || dag?.meta?.source?.title)}-${headSha}`;
+    const branchExists = runProbe('git', ['show-ref', '--verify', '--quiet', `refs/heads/${headBranch}`], {
+      cwd: repoRoot,
+    });
+    const switchArgs = branchExists.status === 0 ? ['switch', headBranch] : ['switch', '-c', headBranch];
+    requireSuccessfulProbe('git', switchArgs, { cwd: repoRoot, timeoutMs: 30_000 });
+  }
+
+  const remoteBase = `${remote}/${baseBranch}`;
+  requireSuccessfulProbe('git', ['rev-parse', '--verify', remoteBase], { cwd: repoRoot });
+  const commitCount = Number(
+    requireSuccessfulProbe('git', ['rev-list', '--count', `${remoteBase}..HEAD`], { cwd: repoRoot }),
+  );
+  if (!Number.isFinite(commitCount) || commitCount < 1) {
+    throw new Error(`no commits to propose between ${remoteBase} and ${headBranch}`);
+  }
+
+  requireSuccessfulProbe('git', ['push', '-u', remote, headBranch], { cwd: repoRoot, timeoutMs: 120_000 });
+
+  const existing = existingPullRequest({ repoRoot, baseBranch, headBranch });
+  if (existing?.url) {
+    return { ...existing, baseBranch, headBranch, reused: true };
+  }
+
+  const title = String(dag?.meta?.source?.title || dag?.meta?.id || 'Loom DAG implementation')
+    .trim()
+    .slice(0, 120);
+  const url = requireSuccessfulProbe(
+    githubBin(),
+    [
+      'pr',
+      'create',
+      '--base',
+      baseBranch,
+      '--head',
+      headBranch,
+      '--title',
+      title,
+      '--body',
+      pullRequestBody(dag),
+    ],
+    { cwd: repoRoot, timeoutMs: 120_000 },
+  );
+  return { url: url.split(/\r?\n/).filter(Boolean).at(-1), title, baseBranch, headBranch, reused: false };
+}
+
 function providerFromArgs(userArgs) {
   const raw = userArgs.find((arg) => arg.startsWith('--provider='));
   const provider = raw ? raw.split('=')[1] : 'codex';
@@ -1160,7 +1295,7 @@ function checkGitRepo({ allowDirtyRepo, errors, warnings }) {
   }
 }
 
-function runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo }) {
+function runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo, createPr }) {
   const errors = [];
   const warnings = [];
 
@@ -1179,6 +1314,7 @@ function runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo }) {
   }
 
   checkGitRepo({ allowDirtyRepo, errors, warnings });
+  if (createPr) checkExecutablePath('GitHub CLI', githubBin(), ['--version'], errors, warnings);
 
   for (const warning of warnings) console.error(`[loom-supervisor] preflight warning: ${warning}`);
   if (errors.length === 0) {
@@ -1272,7 +1408,7 @@ function printField(label, value) {
 function statusExitCode(status, counts, checkpointMissing) {
   if (checkpointMissing) return 1;
   if (counts.blocked > 0) return 2;
-  if (['paused', 'stopped', 'aborted'].includes(status)) return 2;
+  if (['paused', 'stopped', 'aborted', 'pr-failed'].includes(status)) return 2;
   return 0;
 }
 
@@ -1309,12 +1445,23 @@ function showStatus({ dagPath, checkpointPath }) {
   printField('quotaResetAt', checkpoint.quota?.resetAt);
   printField('pauseReason', pauseReason);
   printField('blockedTasks', formatBlockedTasks(blockedTasks));
+  printField('pullRequestStatus', checkpoint.pullRequest?.status);
+  printField('pullRequestUrl', checkpoint.pullRequest?.url);
   printField('nextAction', checkpoint.nextAction);
   printField('tasks', formatTaskCounts(counts));
   return statusExitCode(status, counts, false);
 }
 
-function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLogPath, forceDetach, allowDirtyRepo }) {
+function detachSupervisor({
+  dagPath,
+  userArgs,
+  checkpointPath,
+  logDir,
+  detachLogPath,
+  forceDetach,
+  allowDirtyRepo,
+  createPr,
+}) {
   const existing = readJson(checkpointPath);
   if (!forceDetach && checkpointLooksActive(existing)) {
     const pid = activeSupervisorPid(existing);
@@ -1324,7 +1471,7 @@ function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLog
     return 4;
   }
 
-  if (!runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo })) return 1;
+  if (!runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo, createPr })) return 1;
 
   fs.mkdirSync(path.dirname(detachLogPath), { recursive: true });
   fs.mkdirSync(logDir, { recursive: true });
@@ -1357,6 +1504,7 @@ function detachSupervisor({ dagPath, userArgs, checkpointPath, logDir, detachLog
       env: {
         ...process.env,
         ...(allowDirtyRepo && { LOOM_SUPERVISOR_ALLOW_DIRTY_REPO: '1' }),
+        ...(!createPr && { LOOM_SUPERVISOR_CREATE_PR: '0' }),
       },
     });
   } finally {
@@ -1431,6 +1579,7 @@ async function main(argv) {
       userArgs,
       priority: flags.priority,
       allowDirtyRepo: flags.allowDirtyRepo,
+      createPr: flags.createPr,
     });
   }
   if (flags.queuePause) return updateQueueItemStatus({ queuePath, itemId: dagArg, nextStatus: 'paused' });
@@ -1457,6 +1606,7 @@ async function main(argv) {
 
   const { checkpointPath, logDir, detachLogPath } = resolvePaths(dagPath);
   const allowDirtyRepo = flags.allowDirtyRepo || process.env.LOOM_SUPERVISOR_ALLOW_DIRTY_REPO === '1';
+  const createPr = flags.createPr && process.env.LOOM_SUPERVISOR_CREATE_PR !== '0';
   const defaultStatus = invokedAs === 'loom-status';
   if (flags.status || defaultStatus) return showStatus({ dagPath, checkpointPath });
   if (flags.stop) return stopSupervisor({ dagPath, checkpointPath });
@@ -1471,10 +1621,11 @@ async function main(argv) {
       detachLogPath,
       forceDetach: flags.forceDetach,
       allowDirtyRepo,
+      createPr,
     });
   }
 
-  if (!runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo })) return 1;
+  if (!runPreflight({ dagPath, userArgs, checkpointPath, allowDirtyRepo, createPr })) return 1;
 
   const maxWallclockSec = envInt('LOOM_SUPERVISOR_MAX_WALLCLOCK_SEC', DEFAULT_MAX_WALLCLOCK_SEC);
   const maxAttempts = envInt('LOOM_SUPERVISOR_MAX_ATTEMPTS', DEFAULT_MAX_ATTEMPTS);
@@ -1556,9 +1707,39 @@ async function main(argv) {
     }
 
     if (result.code === 0) {
+      if (createPr) {
+        appendStatus(checkpointPath, {
+          status: 'creating-pr',
+          pullRequest: { status: 'creating' },
+          nextAction: 'pushing the completed DAG and opening a pull request',
+        });
+        try {
+          const pullRequest = createPullRequest({ dagPath });
+          appendStatus(checkpointPath, {
+            status: 'completed',
+            completedAt: nowIso(),
+            pullRequest: { status: 'created', ...pullRequest },
+            nextAction: pullRequest.url,
+          });
+          console.error(`[loom-supervisor] pull request: ${pullRequest.url}`);
+          return 0;
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          appendStatus(checkpointPath, {
+            status: 'pr-failed',
+            completedAt: nowIso(),
+            reason: `DAG completed but PR creation failed: ${reason}`,
+            pullRequest: { status: 'failed', error: reason },
+            nextAction: `fix GitHub access and resume with loom-supervisor ${dagPath}`,
+          });
+          console.error(`[loom-supervisor] PR creation failed: ${reason}`);
+          return 1;
+        }
+      }
       appendStatus(checkpointPath, {
         status: 'completed',
         completedAt: nowIso(),
+        pullRequest: { status: 'disabled' },
         nextAction: 'none',
       });
       return 0;
