@@ -76,7 +76,7 @@ describe('IntakeService', () => {
         calls += 1;
         return calls === 1
           ? triageValue({ needsClarification: true, proposedAction: 'clarify', questions: ['Which surface?'] })
-          : triageValue();
+          : triageValue({ risk: 'elevated' });
       },
     };
     const item = createInboxItem(dir, 'Improve intake');
@@ -85,7 +85,7 @@ describe('IntakeService', () => {
     await waitFor(() => readInbox(dir).items[0].intakeStatus === 'awaiting-clarification');
     service.clarify(item.id, 1, 'The web UI');
     assert.throws(() => service.clarify(item.id, 1, 'Duplicate'), /no longer awaiting clarification/);
-    await waitFor(() => calls === 2);
+    await waitFor(() => readInbox(dir).items[0].intakeStatus === 'awaiting-approval');
     const updated = readInbox(dir).items[0];
     assert.equal(updated.body, 'Improve intake');
     assert.equal(updated.clarificationRounds, 1);
