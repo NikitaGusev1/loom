@@ -3,7 +3,7 @@ import type { UiGitStatus } from './types.js';
 
 export const parseGitStatus = (output: string): UiGitStatus => {
   const lines = output.split('\n').filter(Boolean);
-  const header = lines[0]?.startsWith('## ') ? lines.shift()?.slice(3) ?? '' : '';
+  const header = lines[0]?.startsWith('## ') ? (lines.shift()?.slice(3) ?? '') : '';
   const branch = header.split('...')[0]?.split(' [')[0]?.trim() || null;
   const ahead = Number(header.match(/ahead (\d+)/)?.[1] ?? 0);
   const behind = Number(header.match(/behind (\d+)/)?.[1] ?? 0);

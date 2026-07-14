@@ -26,6 +26,7 @@ const context = {
   activeMutationLease: false,
   overlappingFiles: [],
   todoBody: 'Fix typo',
+  clarificationRounds: 0,
 };
 
 describe('decideIntake', () => {
@@ -43,11 +44,39 @@ describe('decideIntake', () => {
       'awaiting-approval',
     );
   });
+  it('forces a DAG approval proposal after three clarification rounds', () => {
+    const decision = decideIntake(
+      triage({ needsClarification: true, proposedAction: 'clarify' }),
+      DEFAULT_INTAKE_POLICY,
+      { ...context, clarificationRounds: 3 },
+    );
+    assert.equal(decision.kind, 'awaiting-approval');
+    assert.equal(decision.kind === 'awaiting-approval' ? decision.forcedAction : undefined, 'propose-dag');
+  });
   it('requires approval for deterministic risk categories and dirty projects', () => {
     assert.equal(requiresMandatoryApproval('Install a new authentication package'), true);
     assert.equal(
       decideIntake(triage(), DEFAULT_INTAKE_POLICY, { ...context, gitClean: false }).kind,
       'awaiting-approval',
+    );
+    assert.equal(
+      decideIntake(triage(), DEFAULT_INTAKE_POLICY, {
+        ...context,
+        clarificationRounds: 1,
+        clarificationAnswers: ['Deploy it to production'],
+      }).kind,
+      'awaiting-approval',
+    );
+  });
+  it('trusts transcript-aware triage after an ambiguous referent is answered', () => {
+    assert.equal(
+      decideIntake(triage(), DEFAULT_INTAKE_POLICY, {
+        ...context,
+        todoBody: 'move it to done',
+        clarificationRounds: 1,
+        clarificationAnswers: ['The todo card'],
+      }).kind,
+      'execute-sequential',
     );
   });
   it('does not execute the ambiguous news-app fixture', () => {

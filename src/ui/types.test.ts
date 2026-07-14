@@ -13,6 +13,10 @@ describe('ui shared types', () => {
       source: 'ui',
       linkedDagPath: null,
       linkedTaskId: null,
+      clarificationRounds: 1,
+      clarificationMessages: [
+        { id: 'm1', role: 'loom', content: 'Which view?', createdAt: 'now', proposalRevision: 1 },
+      ],
     };
     const dag: UiDagListItem = {
       path: '/repo/work.json',
@@ -40,6 +44,7 @@ describe('ui shared types', () => {
     };
 
     assert.equal(inbox.status, 'open');
+    assert.equal(inbox.clarificationMessages?.[0].role, 'loom');
     assert.equal(dag.completedTasks, 1);
     assert.equal(task.status, 'running');
   });

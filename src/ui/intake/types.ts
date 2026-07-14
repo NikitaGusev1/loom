@@ -16,6 +16,15 @@ export const intakeStatusSchema = z.enum([
 ]);
 export type UiIntakeStatus = z.infer<typeof intakeStatusSchema>;
 
+export const clarificationMessageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['loom', 'user']),
+  content: z.string().min(1),
+  createdAt: z.string(),
+  proposalRevision: z.number().int().positive(),
+});
+export type UiClarificationMessage = z.infer<typeof clarificationMessageSchema>;
+
 export const triageResultSchema = z.object({
   version: z.literal(1),
   status: z.literal('complete'),

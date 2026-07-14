@@ -6,6 +6,7 @@ import {
   addIntakeJob,
   readCheckpoint,
   setIntakePolicy,
+  StaleProposalError,
   updateInboxItem,
   updateIntakeJob,
   writePlan,
@@ -28,6 +29,13 @@ const approvalFor = (decision: IntakeDecision, revision: number, now: string) =>
     return { status: 'pending' as const, proposalRevision: revision, decidedAt: null };
   }
   return null;
+};
+
+const clarificationQuestion = (triage: UiTriageResult): string => {
+  const explicit = triage.questions[0]?.trim();
+  if (explicit) return explicit;
+  const rationale = triage.rationale.trim().replace(/[.?!]+$/, '');
+  return `Could you clarify: ${rationale || 'what outcome should Loom target'}?`;
 };
 
 export class IntakeService {
@@ -127,7 +135,27 @@ export class IntakeService {
     updateInboxItem(
       this.projectPath,
       itemId,
-      (item) => ({ ...item, body: `${item.body}\n\nClarification: ${trimmed}`, updatedAt: this.now() }),
+      (item) => {
+        if (item.intakeStatus !== 'awaiting-clarification') {
+          throw new StaleProposalError(`Inbox item "${itemId}" is no longer awaiting clarification`);
+        }
+        return {
+          ...item,
+          intakeStatus: 'triaging',
+          clarificationMessages: [
+            ...(item.clarificationMessages ?? []),
+            {
+              id: `message-${this.id()}`,
+              role: 'user',
+              content: trimmed,
+              createdAt: this.now(),
+              proposalRevision: revision,
+            },
+          ],
+          clarificationRounds: (item.clarificationRounds ?? 0) + 1,
+          updatedAt: this.now(),
+        };
+      },
       revision,
     );
     this.enqueueTriage(itemId);
@@ -223,7 +251,10 @@ export class IntakeService {
       const item = file.items.find((candidate) => candidate.id === itemId);
       if (!item) throw new Error(`Inbox item "${itemId}" not found`);
       const context = collectIntakeContext(this.projectPath);
-      const raw = await this.triageProvider.triage(buildTriagePrompt(item.body, context, revision), controller.signal);
+      const raw = await this.triageProvider.triage(
+        buildTriagePrompt(item.body, context, revision, item.clarificationMessages),
+        controller.signal,
+      );
       if (controller.signal.aborted || this.stopped) return;
       const triage = parseTriageResult(raw, revision);
       const decision = decideIntake(triage, file.policy, {
@@ -232,19 +263,55 @@ export class IntakeService {
         activeMutationLease: false,
         overlappingFiles: [],
         todoBody: item.body,
+        clarificationRounds: item.clarificationRounds,
+        clarificationAnswers: (item.clarificationMessages ?? [])
+          .filter((message) => message.role === 'user')
+          .map((message) => message.content),
       });
+      const forcedAction = decision.kind === 'awaiting-approval' ? decision.forcedAction : undefined;
+      const effectiveTriage: UiTriageResult = forcedAction
+        ? {
+            ...triage,
+            needsClarification: false,
+            proposedAction: forcedAction,
+            rationale: decision.kind === 'awaiting-approval' ? decision.reason : triage.rationale,
+          }
+        : triage;
       const intakeStatus = decision.kind === 'execute-sequential' ? 'queued' : decision.kind;
+      const needsDagProposal =
+        decision.kind === 'awaiting-approval' && effectiveTriage.proposedAction === 'propose-dag';
       updateInboxItem(this.projectPath, itemId, (value) => ({
         ...value,
-        triage,
-        intakeStatus,
-        executionMode: triage.proposedAction === 'propose-dag' ? 'dag' : 'sequential',
-        approval: approvalFor(decision, revision, this.now()),
+        triage: effectiveTriage,
+        intakeStatus: needsDagProposal ? 'triaging' : intakeStatus,
+        executionMode: effectiveTriage.proposedAction === 'propose-dag' ? 'dag' : 'sequential',
+        approval: needsDagProposal ? null : approvalFor(decision, revision, this.now()),
+        ...(decision.kind === 'awaiting-clarification' && {
+          clarificationMessages: (() => {
+            const messages = value.clarificationMessages ?? [];
+            const question = clarificationQuestion(triage);
+            const duplicate = messages.some(
+              (message) => message.role === 'loom' && message.proposalRevision === revision,
+            );
+            return duplicate
+              ? messages
+              : [
+                  ...messages,
+                  {
+                    id: `message-${this.id()}`,
+                    role: 'loom' as const,
+                    content: question,
+                    createdAt: this.now(),
+                    proposalRevision: revision,
+                  },
+                ];
+          })(),
+        }),
         updatedAt: this.now(),
         lastError: null,
       }));
-      if (decision.kind === 'awaiting-approval' && triage.proposedAction === 'propose-dag') {
-        const proposal = await this.dagPlanner.propose(this.projectPath, item, triage);
+      if (needsDagProposal) {
+        const proposal = await this.dagPlanner.propose(this.projectPath, item, effectiveTriage);
         updateInboxItem(
           this.projectPath,
           itemId,
@@ -253,6 +320,8 @@ export class IntakeService {
             linkedPlanPath: proposal.planPath,
             linkedDagPath: proposal.dagPath,
             executionMode: 'dag',
+            intakeStatus: 'awaiting-approval',
+            approval: approvalFor(decision, revision, this.now()),
             updatedAt: this.now(),
           }),
           revision,
@@ -265,7 +334,7 @@ export class IntakeService {
         leaseAt: null,
         updatedAt: this.now(),
       }));
-      if (decision.kind === 'execute-sequential') this.startSequential(itemId, triage);
+      if (decision.kind === 'execute-sequential') this.startSequential(itemId, effectiveTriage);
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);

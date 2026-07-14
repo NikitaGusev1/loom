@@ -68,6 +68,60 @@ describe('ui inbox persistence', () => {
     assert.deepEqual(readInbox(projectDir).items, [item]);
   });
 
+  it('loads additive clarification transcripts from schema v2', () => {
+    const path = getInboxPath(projectDir);
+    mkdirSync(dirname(path), { recursive: true });
+    const item = {
+      id: 'todo-1',
+      createdAt: 'now',
+      updatedAt: 'now',
+      body: 'Improve intake',
+      status: 'open',
+      source: 'ui',
+      linkedDagPath: null,
+      linkedTaskId: null,
+      clarificationRounds: 1,
+      clarificationMessages: [
+        { id: 'm1', role: 'loom', content: 'Which surface?', createdAt: 'now', proposalRevision: 1 },
+      ],
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 2,
+        items: [item],
+        jobs: [],
+        policy: { autoRunEnabled: true, confidenceThreshold: 0.85, triageProvider: 'codex' },
+      }),
+    );
+    assert.deepEqual(readInbox(projectDir).items[0], item);
+  });
+
+  it('rejects malformed clarification transcript fields', () => {
+    const path = getInboxPath(projectDir);
+    mkdirSync(dirname(path), { recursive: true });
+    const file = {
+      schemaVersion: 2,
+      items: [
+        {
+          id: 'todo-1',
+          createdAt: 'now',
+          updatedAt: 'now',
+          body: 'Improve intake',
+          status: 'open',
+          source: 'ui',
+          linkedDagPath: null,
+          linkedTaskId: null,
+          clarificationRounds: -1,
+        },
+      ],
+      jobs: [],
+      policy: { autoRunEnabled: true, confidenceThreshold: 0.85, triageProvider: 'codex' },
+    };
+    writeFileSync(path, JSON.stringify(file));
+    assert.throws(() => readInbox(projectDir), InboxParseError);
+  });
+
   it('rejects empty todo body text', () => {
     assert.throws(() => createInboxItem(projectDir, '   '), /Inbox item body is required/);
   });

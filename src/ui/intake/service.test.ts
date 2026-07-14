@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { createInboxItem, readInbox } from '../inbox.js';
 import { SequentialRunner } from './sequential-runner.js';
 import { IntakeService } from './service.js';
+import { addIntakeJob, updateInboxItem } from './persistence.js';
+import type { DagPlanner } from './dag-planner.js';
 import type { SequentialProvider, TriageProvider } from './types.js';
 
 let dir: string;
@@ -59,7 +61,92 @@ describe('IntakeService', () => {
     await waitFor(() => typeof release === 'function');
     release();
     await waitFor(() => readInbox(dir).items[0].intakeStatus === 'awaiting-clarification');
-    assert.equal(readInbox(dir).items[0].linkedRunId, undefined);
+    const updated = readInbox(dir).items[0];
+    assert.equal(updated.linkedRunId, undefined);
+    assert.equal(updated.clarificationMessages?.[0].content, 'What is it?');
+    service.stop();
+  });
+
+  it('persists one answer per revision without changing the todo body', async () => {
+    let calls = 0;
+    const prompts: string[] = [];
+    const provider: TriageProvider = {
+      triage: async (prompt) => {
+        prompts.push(prompt);
+        calls += 1;
+        return calls === 1
+          ? triageValue({ needsClarification: true, proposedAction: 'clarify', questions: ['Which surface?'] })
+          : triageValue();
+      },
+    };
+    const item = createInboxItem(dir, 'Improve intake');
+    const service = new IntakeService(dir, provider);
+    service.enqueueTriage(item.id);
+    await waitFor(() => readInbox(dir).items[0].intakeStatus === 'awaiting-clarification');
+    service.clarify(item.id, 1, 'The web UI');
+    assert.throws(() => service.clarify(item.id, 1, 'Duplicate'), /no longer awaiting clarification/);
+    await waitFor(() => calls === 2);
+    const updated = readInbox(dir).items[0];
+    assert.equal(updated.body, 'Improve intake');
+    assert.equal(updated.clarificationRounds, 1);
+    assert.equal(updated.clarificationMessages?.filter((message) => message.role === 'user').length, 1);
+    assert.match(prompts[1], /The web UI/);
+    service.stop();
+  });
+
+  it('links a DAG proposal when clarification is exhausted', async () => {
+    let resolvePlanner!: () => void;
+    let plannerStarted = false;
+    const planner: DagPlanner = {
+      propose: async () => {
+        plannerStarted = true;
+        await new Promise<void>((resolve) => {
+          resolvePlanner = resolve;
+        });
+        return { planPath: `${dir}/plan.md`, dagPath: `${dir}/dag.json` };
+      },
+    };
+    const provider: TriageProvider = {
+      triage: async () =>
+        triageValue({ needsClarification: true, proposedAction: 'clarify', questions: ['One more detail?'] }),
+    };
+    const item = createInboxItem(dir, 'Ambiguous feature');
+    updateInboxItem(dir, item.id, (value) => ({ ...value, clarificationRounds: 3 }));
+    const service = new IntakeService(dir, provider, undefined, undefined, undefined, planner);
+    service.enqueueTriage(item.id);
+    await waitFor(() => plannerStarted);
+    const planning = readInbox(dir).items[0];
+    assert.equal(planning.intakeStatus, 'triaging');
+    assert.equal(planning.approval, null);
+    assert.equal(planning.linkedDagPath, null);
+    resolvePlanner();
+    await waitFor(() => Boolean(readInbox(dir).items[0].linkedDagPath));
+    const updated = readInbox(dir).items[0];
+    assert.equal(updated.intakeStatus, 'awaiting-approval');
+    assert.equal(updated.triage?.proposedAction, 'propose-dag');
+    assert.equal(updated.linkedDagPath, `${dir}/dag.json`);
+    assert.equal(updated.clarificationMessages, undefined);
+    service.stop();
+  });
+
+  it('persists a rationale fallback when triage omits its question', async () => {
+    const provider: TriageProvider = {
+      triage: async () =>
+        triageValue({
+          needsClarification: true,
+          proposedAction: 'clarify',
+          questions: [],
+          rationale: 'the target view is unclear.',
+        }),
+    };
+    const item = createInboxItem(dir, 'Improve this');
+    const service = new IntakeService(dir, provider);
+    service.enqueueTriage(item.id);
+    await waitFor(() => readInbox(dir).items[0].intakeStatus === 'awaiting-clarification');
+    assert.equal(
+      readInbox(dir).items[0].clarificationMessages?.[0].content,
+      'Could you clarify: the target view is unclear?',
+    );
     service.stop();
   });
 
@@ -97,7 +184,7 @@ describe('IntakeService', () => {
     service.stop();
   });
 
-  it('deduplicates repeated triage requests for the same revision', async () => {
+  it('deduplicates repeated triage requests and recovered questions for the same revision', async () => {
     let calls = 0;
     const provider: TriageProvider = {
       triage: async () => {
@@ -111,6 +198,28 @@ describe('IntakeService', () => {
     service.enqueueTriage(item.id);
     await waitFor(() => readInbox(dir).items[0].intakeStatus === 'awaiting-clarification');
     assert.equal(calls, 1);
+    assert.equal(readInbox(dir).items[0].clarificationMessages?.filter((message) => message.role === 'loom').length, 1);
     service.stop();
+
+    updateInboxItem(dir, item.id, (value) => ({ ...value, intakeStatus: 'triaging' }));
+    addIntakeJob(dir, {
+      id: 'job-recovered',
+      itemId: item.id,
+      kind: 'triage',
+      status: 'queued',
+      proposalRevision: 1,
+      idempotencyKey: `${item.id}:1:triage-recovery`,
+      createdAt: '2026-07-11T00:00:00.000Z',
+      updatedAt: '2026-07-11T00:00:00.000Z',
+      ownerPid: null,
+      leaseAt: null,
+      attempts: 0,
+      error: null,
+    });
+    const recovered = new IntakeService(dir, provider);
+    recovered.start();
+    await waitFor(() => readInbox(dir).jobs.some((job) => job.id === 'job-recovered' && job.status === 'completed'));
+    assert.equal(readInbox(dir).items[0].clarificationMessages?.filter((message) => message.role === 'loom').length, 1);
+    recovered.stop();
   });
 });

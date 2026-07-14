@@ -281,6 +281,14 @@ describe('createUiServer', () => {
       assert.match(html, /compact\(d\.description,96\)/);
       assert.match(html, /compact\(t\?\.summary\|\|i\.body,120\)/);
       assert.doesNotMatch(html, /esc\(t\.rationale\)/);
+      assert.match(html, /role="dialog" aria-modal="true"/);
+      assert.match(html, /conversationMessages/);
+      assert.match(html, /legacyQuestion/);
+      assert.match(html, /event\.key==='Enter'&&!event\.shiftKey/);
+      assert.match(html, /event\.key==='Escape'/);
+      assert.match(html, /conversationDrafts/);
+      assert.match(html, /autoOpenedQuestions/);
+      assert.doesNotMatch(html, /prompt\('Clarify this todo'\)/);
     });
   });
 

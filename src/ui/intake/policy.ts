@@ -2,7 +2,7 @@ import type { UiIntakePolicy, UiTriageResult } from './types.js';
 
 export type IntakeDecision =
   | { kind: 'execute-sequential' }
-  | { kind: 'awaiting-approval'; reason: string }
+  | { kind: 'awaiting-approval'; reason: string; forcedAction?: 'propose-dag' }
   | { kind: 'awaiting-clarification'; reason: string }
   | { kind: 'deferred'; reason: string };
 
@@ -12,6 +12,8 @@ export interface IntakeGateContext {
   activeMutationLease: boolean;
   overlappingFiles: string[];
   todoBody: string;
+  clarificationRounds?: number;
+  clarificationAnswers?: string[];
 }
 
 const MANDATORY_APPROVAL = [
@@ -24,6 +26,11 @@ const MANDATORY_APPROVAL = [
   /\b(refactor everything|broad refactor)\b/i,
 ];
 const AMBIGUOUS_REFERENT = /\b(move|mark|set|change)\s+(it|this|that|them)\b/i;
+const clarificationExhausted = (): IntakeDecision => ({
+  kind: 'awaiting-approval',
+  reason: 'Clarification limit reached; review the proposal assumptions before execution',
+  forcedAction: 'propose-dag',
+});
 
 export const requiresMandatoryApproval = (body: string): boolean =>
   MANDATORY_APPROVAL.some((pattern) => pattern.test(body));
@@ -33,10 +40,11 @@ export const decideIntake = (
   policy: UiIntakePolicy,
   context: IntakeGateContext,
 ): IntakeDecision => {
-  if (AMBIGUOUS_REFERENT.test(context.todoBody)) {
+  if ((context.clarificationRounds ?? 0) === 0 && AMBIGUOUS_REFERENT.test(context.todoBody)) {
     return { kind: 'awaiting-clarification', reason: 'The request has an ambiguous referent' };
   }
   if (triage.needsClarification || triage.proposedAction === 'clarify') {
+    if ((context.clarificationRounds ?? 0) >= 3) return clarificationExhausted();
     return { kind: 'awaiting-clarification', reason: triage.rationale };
   }
   if (triage.relevance === 'unrelated' || triage.proposedAction === 'reject' || triage.proposedAction === 'defer') {
@@ -51,7 +59,8 @@ export const decideIntake = (
     !context.gitClean && 'Project has uncommitted changes',
     context.activeMutationLease && 'Another sequential runner owns the project lease',
     context.overlappingFiles.length > 0 && 'Estimated files overlap active work',
-    requiresMandatoryApproval(context.todoBody) && 'Request matches a mandatory approval category',
+    requiresMandatoryApproval([context.todoBody, ...(context.clarificationAnswers ?? [])].join('\n')) &&
+      'Request matches a mandatory approval category',
     triage.relevance !== 'relevant' && 'Request is not clearly relevant',
     !['trivial', 'small'].includes(triage.complexity) && 'Request is not small',
     triage.risk !== 'low' && 'Request risk is not low',

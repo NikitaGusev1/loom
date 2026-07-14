@@ -1,7 +1,13 @@
 import type { BacklogBlockedTask, DecompositionDAG, ExecutionState, TaskStatus } from '../types.js';
 import type { DagEvent } from '../events/types.js';
 import type { SlotsScan } from '../slots-status.js';
-import type { UiApproval, UiExecutionMode, UiIntakeStatus, UiTriageResult } from './intake/types.js';
+import type {
+  UiApproval,
+  UiClarificationMessage,
+  UiExecutionMode,
+  UiIntakeStatus,
+  UiTriageResult,
+} from './intake/types.js';
 
 export type UiInboxStatus = 'open' | 'converted' | 'archived';
 
@@ -23,6 +29,8 @@ export interface UiInboxItem {
   lastError?: string | null;
   executionStartedAt?: string | null;
   executionCompletedAt?: string | null;
+  clarificationMessages?: UiClarificationMessage[];
+  clarificationRounds?: number;
 }
 
 export interface UiInboxFileV1 {

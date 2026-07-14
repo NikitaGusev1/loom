@@ -44,4 +44,28 @@ describe('triage provider boundary', () => {
       /execute-sequential/,
     );
   });
+
+  it('includes prior answers and limits clarification to one material question', () => {
+    const prompt = buildTriagePrompt(
+      'Improve intake',
+      {
+        projectPath: '/p',
+        projectName: 'p',
+        guidance: [],
+        files: [],
+        openTodos: [],
+        dags: [],
+        git: { isRepository: true, clean: true, branch: 'main' },
+        activeSequentialFiles: [],
+      },
+      2,
+      [
+        { id: 'm1', role: 'loom', content: 'Which surface?', createdAt: 'now', proposalRevision: 1 },
+        { id: 'm2', role: 'user', content: 'Web UI', createdAt: 'now', proposalRevision: 1 },
+      ],
+    );
+    assert.match(prompt, /Web UI/);
+    assert.match(prompt, /exactly one concise primary question/);
+    assert.match(prompt, /requires approval rather than clarification/);
+  });
 });

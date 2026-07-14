@@ -5,6 +5,7 @@ import type { UiInboxItem, UiInboxStatus } from './types.js';
 import {
   DEFAULT_INTAKE_POLICY,
   approvalSchema,
+  clarificationMessageSchema,
   executionModeSchema,
   intakeJobSchema,
   intakePolicySchema,
@@ -61,6 +62,16 @@ const assertInboxItem = (item: unknown): UiInboxItem => {
   if (candidate.intakeStatus !== undefined) intakeStatusSchema.parse(candidate.intakeStatus);
   if (candidate.triage !== undefined && candidate.triage !== null) triageResultSchema.parse(candidate.triage);
   if (candidate.approval !== undefined && candidate.approval !== null) approvalSchema.parse(candidate.approval);
+  if (candidate.clarificationMessages !== undefined) {
+    if (!Array.isArray(candidate.clarificationMessages)) throw new Error('expected item.clarificationMessages array');
+    candidate.clarificationMessages.forEach((message) => clarificationMessageSchema.parse(message));
+  }
+  if (
+    candidate.clarificationRounds !== undefined &&
+    (!Number.isInteger(candidate.clarificationRounds) || candidate.clarificationRounds < 0)
+  ) {
+    throw new Error('expected item.clarificationRounds non-negative integer');
+  }
   if (candidate.executionMode !== undefined && candidate.executionMode !== null) {
     executionModeSchema.parse(candidate.executionMode);
   }
