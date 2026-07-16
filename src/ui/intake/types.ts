@@ -57,6 +57,50 @@ export type UiSequentialPhase = z.infer<typeof sequentialPhaseSchema>;
 export const runStatusSchema = z.enum(['queued', 'running', 'completed', 'failed', 'blocked', 'cancelled']);
 export type UiRunStatus = z.infer<typeof runStatusSchema>;
 
+/**
+ * The small, stable subset of a supervisor queue record needed by the UI.
+ * Queue clients may carry further fields; readers intentionally tolerate them.
+ */
+export interface SupervisorQueueItem {
+  id: string;
+  projectPath?: string;
+  status?: string;
+  checkpointPath?: string;
+  checkpoint?: unknown;
+  sourcePath?: string;
+  sourceDefinitionPath?: string;
+  executionArtifacts?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface UiDagTaskProgress {
+  completed: number;
+  total: number;
+}
+
+export interface UiSupervisorCheckpoint {
+  id: string;
+  status: UiRunStatus;
+  createdAt: string | null;
+  updatedAt: string | null;
+  dagPath: string | null;
+  taskProgress: UiDagTaskProgress;
+  pullRequest: {
+    number: number | null;
+    url: string | null;
+    status: string | null;
+  } | null;
+}
+
+export interface SupervisorCheckpointReadResult {
+  checkpoint: UiSupervisorCheckpoint | null;
+  /** Queue state remains available even when the checkpoint is unavailable. */
+  status: UiRunStatus;
+  diagnostics: string[];
+  checkpointPath: string | null;
+  sourcePath: string | null;
+}
+
 export const intakePolicySchema = z.object({
   autoRunEnabled: z.boolean(),
   confidenceThreshold: z.number().finite().min(0).max(1),
