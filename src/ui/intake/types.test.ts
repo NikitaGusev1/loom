@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { statusProjection } from './checkpoint-projection.js';
-import type { UiDagProposal } from './inbox-proposal-schema.js';
+import type { UiDagProposal } from '../types.js';
+import { projectDagExecutionStatus as statusProjection } from './supervisor-checkpoint.js';
 import { intakePolicySchema, sequentialCheckpointSchema, triageResultSchema } from './types.js';
 
 describe('intake runtime contracts', () => {
@@ -66,8 +66,8 @@ describe('intake runtime contracts', () => {
 
   it('keeps legacy proposals and checkpoints compatible with the richer UI lifecycle', () => {
     const legacyProposal = {
-      id: 'proposal-1',
-      title: 'Show queue state',
+      revision: 1,
+      affectedFiles: [],
     } as UiDagProposal;
     const legacyCheckpoint = {
       schemaVersion: 1,

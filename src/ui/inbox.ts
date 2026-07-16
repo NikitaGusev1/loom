@@ -50,8 +50,9 @@ const isStringOrNull = (value: unknown): value is string | null => typeof value 
 const assertDagProposal = (proposal: unknown): UiDagProposal => {
   if (!proposal || typeof proposal !== 'object') throw new Error('expected item.proposal object');
   const candidate = proposal as Partial<UiDagProposal>;
-  if (typeof candidate.revision !== 'number' || !Number.isInteger(candidate.revision) || candidate.revision < 1) {
-    throw new Error('expected item.proposal.revision positive integer');
+  const revision = candidate.proposalRevision ?? candidate.revision;
+  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1) {
+    throw new Error('expected item.proposal revision positive integer');
   }
   if (!Array.isArray(candidate.affectedFiles) || candidate.affectedFiles.length > 20) {
     throw new Error('expected item.proposal.affectedFiles array with at most 20 entries');

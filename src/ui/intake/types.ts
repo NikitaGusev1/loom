@@ -188,7 +188,15 @@ export interface UiDagRunSummary extends UiRunBase {
 export type UiRunSummary = UiSequentialRunSummary | UiDagRunSummary;
 export type UiRunDetail =
   | { summary: UiSequentialRunSummary; checkpoint: UiSequentialCheckpoint; recentLog: string[] }
-  | { summary: UiDagRunSummary; dagPath: string };
+  | {
+      summary: UiDagRunSummary;
+      dagPath: string;
+      checkpoint?: unknown;
+      recentLog?: string[];
+      sourceDefinition?: unknown;
+      executionSnapshot?: unknown;
+      pullRequest?: unknown;
+    };
 
 export interface TriageProvider {
   triage(prompt: string, signal?: AbortSignal): Promise<unknown>;

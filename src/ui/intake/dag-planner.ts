@@ -32,7 +32,7 @@ const within = (projectPath: string, path: string): string => {
   return absolute;
 };
 
-const MAX_AFFECTED_FILES = 50;
+const MAX_AFFECTED_FILES = 20;
 
 type DagTask = Record<string, unknown>;
 type ValidatedDag = Record<string, unknown>;

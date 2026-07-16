@@ -1,7 +1,7 @@
 import { resolve, relative } from 'node:path';
 import { readInbox } from '../inbox.js';
 import { listCheckpoints, readRunLogTail } from './persistence.js';
-import type { UiRunDetail, UiRunSummary, UiSequentialRunSummary } from './types.js';
+import type { UiDagRunSummary, UiRunDetail, UiRunSummary, UiSequentialRunSummary } from './types.js';
 
 /**
  * This module deliberately treats a queue execution as the unit of work.  A DAG
@@ -12,7 +12,7 @@ type RecordLike = Record<string, unknown>;
 type CheckpointReader = (projectPath: string, executionId: string) => RecordLike | null | undefined;
 
 const asRecord = (value: unknown): RecordLike | null =>
-  value !== null && typeof value === 'object' ? value as RecordLike : null;
+  value !== null && typeof value === 'object' ? (value as RecordLike) : null;
 
 const stringValue = (record: RecordLike | null, ...keys: string[]): string | null => {
   for (const key of keys) {
@@ -31,8 +31,16 @@ const isContainedPath = (projectPath: string, candidate: unknown): boolean => {
 };
 
 const hasOnlyContainedPaths = (projectPath: string, value: RecordLike | null): boolean =>
-  ['dagPath', 'sourceDagPath', 'definitionPath', 'executionPath', 'snapshotPath', 'checkpointPath', 'planPath', 'logPath']
-    .every((key) => isContainedPath(projectPath, value?.[key]));
+  [
+    'dagPath',
+    'sourceDagPath',
+    'definitionPath',
+    'executionPath',
+    'snapshotPath',
+    'checkpointPath',
+    'planPath',
+    'logPath',
+  ].every((key) => isContainedPath(projectPath, value?.[key]));
 
 const status = (value: unknown): UiSequentialRunSummary['status'] => {
   if (value === 'completed' || value === 'failed' || value === 'running' || value === 'blocked') return value;
@@ -48,11 +56,9 @@ const queueRecords = (value: unknown): RecordLike[] => {
   return record ? [record] : [];
 };
 
-const executionId = (queueItem: RecordLike): string | null =>
-  stringValue(queueItem, 'executionId', 'runId', 'id');
+const executionId = (queueItem: RecordLike): string | null => stringValue(queueItem, 'executionId', 'runId', 'id');
 
-const itemId = (queueItem: RecordLike): string | null =>
-  stringValue(queueItem, 'itemId', 'inboxItemId', 'proposalId');
+const itemId = (queueItem: RecordLike): string | null => stringValue(queueItem, 'itemId', 'inboxItemId', 'proposalId');
 
 const legacyRuns = (projectPath: string): UiSequentialRunSummary[] => {
   const inbox = readInbox(projectPath);
@@ -99,37 +105,47 @@ export const listRuns = (
     queueRecords(proposals).map((proposal) => [stringValue(proposal, 'itemId', 'inboxItemId', 'id'), proposal]),
   );
 
-  return queue.flatMap((queueItem) => {
-    const id = executionId(queueItem);
-    const linkedItemId = itemId(queueItem);
-    const proposal = proposalByItem.get(linkedItemId) ?? null;
-    const checkpoint = checkpointReader && id ? checkpointReader(projectPath, id) : null;
-    if (!id || !hasOnlyContainedPaths(projectPath, queueItem) || !hasOnlyContainedPaths(projectPath, proposal) || !hasOnlyContainedPaths(projectPath, checkpoint)) return [];
+  return queue
+    .flatMap((queueItem) => {
+      const id = executionId(queueItem);
+      const linkedItemId = itemId(queueItem);
+      const proposal = proposalByItem.get(linkedItemId) ?? null;
+      const checkpoint = checkpointReader && id ? (checkpointReader(projectPath, id) ?? null) : null;
+      if (
+        !id ||
+        !hasOnlyContainedPaths(projectPath, queueItem) ||
+        !hasOnlyContainedPaths(projectPath, proposal) ||
+        !hasOnlyContainedPaths(projectPath, checkpoint)
+      )
+        return [];
 
-    const createdAt = stringValue(queueItem, 'createdAt', 'queuedAt', 'startedAt') ?? '';
-    const updatedAt = stringValue(queueItem, 'updatedAt', 'finishedAt', 'startedAt', 'createdAt') ?? createdAt;
-    const checkpointFiles = Array.isArray(checkpoint?.changedFiles) ? checkpoint.changedFiles : [];
-    const title = stringValue(proposal, 'title', 'body')
-      ?? inboxItems.get(linkedItemId ?? '')?.body
-      ?? linkedItemId
-      ?? id;
-    const run: UiSequentialRunSummary = {
-      id,
-      itemId: linkedItemId ?? id,
-      title,
-      mode: 'sequential',
-      status: status(checkpoint?.status ?? queueItem.status),
-      createdAt,
-      updatedAt,
-      phase: stringValue(checkpoint, 'phase') ?? stringValue(queueItem, 'phase') ?? 'queued',
-      provider: stringValue(checkpoint, 'provider') ?? stringValue(queueItem, 'provider') ?? 'unknown',
-      changedFileCount: checkpointFiles.length,
-      verification: (checkpoint?.verification ?? null) as UiSequentialRunSummary['verification'],
-      reviewVerdict: (checkpoint?.reviewVerdict ?? null) as UiSequentialRunSummary['reviewVerdict'],
-      recoveryRequired: checkpoint?.recoveryRequired === true,
-    };
-    return [run];
-  }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const createdAt = stringValue(queueItem, 'createdAt', 'queuedAt', 'startedAt') ?? '';
+      const updatedAt = stringValue(queueItem, 'updatedAt', 'finishedAt', 'startedAt', 'createdAt') ?? createdAt;
+      const title =
+        stringValue(proposal, 'title', 'body') ?? inboxItems.get(linkedItemId ?? '')?.body ?? linkedItemId ?? id;
+      const progress = asRecord(checkpoint?.taskProgress);
+      const completedTasks = Number(checkpoint?.completedTasks ?? progress?.completed ?? 0);
+      const totalTasks = Number(checkpoint?.totalTasks ?? progress?.total ?? 0);
+      const dagPath =
+        stringValue(checkpoint, 'dagPath', 'definitionPath') ??
+        stringValue(queueItem, 'sourceDefinitionPath', 'sourcePath', 'dagPath') ??
+        stringValue(proposal, 'dagPath') ??
+        '';
+      const run: UiDagRunSummary = {
+        id,
+        itemId: linkedItemId ?? id,
+        title,
+        mode: 'dag',
+        status: status(checkpoint?.status ?? queueItem.status),
+        createdAt,
+        updatedAt,
+        dagPath,
+        completedTasks: Number.isFinite(completedTasks) ? completedTasks : 0,
+        totalTasks: Number.isFinite(totalTasks) ? totalTasks : 0,
+      };
+      return [run];
+    })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 };
 
 /** Load contained checkpoint/log detail for one execution without cross-run merging. */
@@ -144,22 +160,32 @@ export const loadRunDetail = (
   if (!summary) throw new Error(`Run "${runId}" not found`);
 
   const queueItem = queueRecords(queueItems).find((item) => executionId(item) === runId) ?? null;
-  const proposal = queueRecords(proposals).find((item) =>
-    stringValue(item, 'itemId', 'inboxItemId', 'id') === itemId(queueItem ?? {}),
-  ) ?? null;
-  const checkpoint = checkpointReader ? checkpointReader(projectPath, runId) : listCheckpoints(projectPath).find((run) => run.id === runId);
+  const proposal =
+    queueRecords(proposals).find(
+      (item) => stringValue(item, 'itemId', 'inboxItemId', 'id') === itemId(queueItem ?? {}),
+    ) ?? null;
+  const checkpoint = checkpointReader
+    ? checkpointReader(projectPath, runId)
+    : listCheckpoints(projectPath).find((run) => run.id === runId);
   const checkpointRecord = checkpoint as unknown as RecordLike | undefined;
-  if (checkpoint && !hasOnlyContainedPaths(projectPath, checkpointRecord ?? null)) throw new Error(`Run "${runId}" not found`);
+  if (checkpoint && !hasOnlyContainedPaths(projectPath, checkpointRecord ?? null))
+    throw new Error(`Run "${runId}" not found`);
   const logPath = checkpoint && stringValue(checkpointRecord ?? null, 'logPath');
-  const recentLog = checkpoint && isContainedPath(projectPath, logPath)
-    ? readRunLogTail(projectPath, runId)
-    : [];
+  const recentLog = checkpoint && isContainedPath(projectPath, logPath) ? readRunLogTail(projectPath, runId) : [];
+  if (summary.mode === 'dag') {
+    return {
+      summary,
+      dagPath: summary.dagPath,
+      checkpoint,
+      recentLog,
+      sourceDefinition: proposal?.sourceDefinition ?? proposal?.sourceDag ?? proposal?.dag,
+      executionSnapshot: queueItem?.executionSnapshot ?? queueItem?.snapshot,
+      pullRequest: queueItem?.pullRequest ?? queueItem?.pr ?? checkpointRecord?.pullRequest ?? checkpointRecord?.pr,
+    };
+  }
   return {
     summary,
     checkpoint,
     recentLog,
-    sourceDefinition: proposal?.sourceDefinition ?? proposal?.sourceDag ?? proposal?.dag,
-    executionSnapshot: queueItem?.executionSnapshot ?? queueItem?.snapshot,
-    pullRequest: queueItem?.pullRequest ?? queueItem?.pr ?? checkpointRecord?.pullRequest ?? checkpointRecord?.pr,
   } as UiRunDetail;
 };

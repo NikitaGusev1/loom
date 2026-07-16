@@ -55,13 +55,11 @@ const actionableError = (prefix: string, error: unknown): string => {
 const matchesCorrelation = (queueItem: CorrelatedQueueItem, itemId: string, revision: number): boolean =>
   queueItem.sourceItemId === itemId && queueItem.proposalRevision === revision;
 
-const proposalCorrelation = (
-  item: {
-    id: string;
-    triage?: { proposalRevision: number } | null;
-    proposal?: Partial<ProposalCorrelation> | null;
-  },
-): ProposalCorrelation | null => {
+const proposalCorrelation = (item: {
+  id: string;
+  triage?: { proposalRevision: number } | null;
+  proposal?: Partial<ProposalCorrelation> | null;
+}): ProposalCorrelation | null => {
   const proposalRevision = item.proposal?.proposalRevision ?? item.triage?.proposalRevision;
   if (proposalRevision === undefined) return null;
   return { sourceItemId: item.proposal?.sourceItemId ?? item.id, proposalRevision };
@@ -171,16 +169,14 @@ export class IntakeService {
     }
     for (const item of file.items) {
       const correlation = proposalCorrelation(item);
-      const linkedQueueItemId = (item as typeof item & { linkedQueueItemId?: string | null })
-        .linkedQueueItemId;
-      const queueItem =
-        !correlation
-          ? undefined
-          : queueItems.find(
-              (candidate) =>
-                (linkedQueueItemId ? candidate.id === linkedQueueItemId : true) &&
-                matchesCorrelation(candidate, correlation.sourceItemId, correlation.proposalRevision),
-            );
+      const linkedQueueItemId = (item as typeof item & { linkedQueueItemId?: string | null }).linkedQueueItemId;
+      const queueItem = !correlation
+        ? undefined
+        : queueItems.find(
+            (candidate) =>
+              (linkedQueueItemId ? candidate.id === linkedQueueItemId : true) &&
+              matchesCorrelation(candidate, correlation.sourceItemId, correlation.proposalRevision),
+          );
       if (queueItem) {
         const status = statusProjection(queueItem);
         const linkedRunId = queueItem.runId ?? item.linkedRunId;
@@ -331,17 +327,13 @@ export class IntakeService {
     if (item.linkedDagPath) {
       const queue = this.supervisorQueue as unknown as CorrelatedSupervisorQueue;
       const correlation = proposalCorrelation(item);
-      if (
-        !correlation ||
-        correlation.sourceItemId !== itemId ||
-        correlation.proposalRevision !== revision
-      ) {
+      if (!correlation || correlation.sourceItemId !== itemId || correlation.proposalRevision !== revision) {
         throw new StaleProposalError(`Inbox item "${itemId}" has no proposal for revision ${revision}`);
       }
       try {
-        const existing = queue.list().find((candidate) =>
-          matchesCorrelation(candidate, correlation.sourceItemId, correlation.proposalRevision),
-        );
+        const existing = queue
+          .list()
+          .find((candidate) => matchesCorrelation(candidate, correlation.sourceItemId, correlation.proposalRevision));
         const queueItem = existing ?? (await enqueueCorrelated(queue, item.linkedDagPath, correlation));
         updateInboxItem(
           this.projectPath,

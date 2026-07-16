@@ -57,7 +57,7 @@ describe('ui shared types', () => {
       statePath: '/repo/queued-work.state.json',
       id: 'queued-work',
       title: 'Queued work',
-      status: 'queued',
+      status: 'not-started',
       totalTasks: 0,
       completedTasks: 0,
       failedTasks: 0,
@@ -68,14 +68,14 @@ describe('ui shared types', () => {
     const detail: UiTaskSummary = {
       id: 'queue-task',
       name: 'Queue task',
-      status: 'queued',
+      status: 'pending',
       layer: 0,
       dependencies: [],
       blockedBy: [],
       rootFailures: [],
     };
 
-    assert.equal(queuedRun.status, 'queued');
+    assert.equal(queuedRun.status, 'not-started');
     assert.equal(detail.dependencies.length, 0);
     assert.equal(detail.blockedBy.length, 0);
   });

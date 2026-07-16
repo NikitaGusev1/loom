@@ -13,8 +13,20 @@ export type UiInboxStatus = 'open' | 'converted' | 'archived';
 
 /** A revision-specific, lightweight snapshot of a proposed DAG change. */
 export interface UiDagProposal {
-  revision: number;
+  /** Legacy spelling retained for persisted schema-v2 inbox files. */
+  revision?: number;
+  proposalRevision?: number;
+  sourceItemId?: string;
+  planPath?: string;
+  dagPath?: string;
+  proposalSnapshotPath?: string;
+  summary?: string;
+  rationale?: string;
+  risk?: UiTriageResult['risk'];
+  taskCount?: number;
+  layerCount?: number;
   affectedFiles: string[];
+  affectedFilesOverflow?: number;
 }
 
 export interface UiInboxItem {
