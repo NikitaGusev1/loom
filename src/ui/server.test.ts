@@ -251,10 +251,22 @@ describe('createUiServer', () => {
       const firstDags = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(first.slug)}/dags`);
       const secondDags = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(second.slug)}/dags`);
 
-      assert.deepEqual(firstListed.json.items.map((item: { body: string }) => item.body), ['First project only']);
-      assert.deepEqual(secondListed.json.items.map((item: { body: string }) => item.body), ['Second project only']);
-      assert.deepEqual(firstDags.json.dags.map((dag: { id: string }) => dag.id), ['work']);
-      assert.deepEqual(secondDags.json.dags.map((dag: { id: string }) => dag.id), ['other']);
+      assert.deepEqual(
+        firstListed.json.items.map((item: { body: string }) => item.body),
+        ['First project only'],
+      );
+      assert.deepEqual(
+        secondListed.json.items.map((item: { body: string }) => item.body),
+        ['Second project only'],
+      );
+      assert.deepEqual(
+        firstDags.json.dags.map((dag: { id: string }) => dag.id),
+        ['work'],
+      );
+      assert.deepEqual(
+        secondDags.json.dags.map((dag: { id: string }) => dag.id),
+        ['other'],
+      );
       assert.deepEqual(queuedFor, [first.repoPath, second.repoPath]);
       assert.notEqual(firstInbox.json.item.id, secondInbox.json.item.id);
     } finally {
