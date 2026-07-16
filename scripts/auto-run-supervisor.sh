@@ -10,7 +10,7 @@
 #   4. Run the phase in a fresh process:
 #        - phase=mode-selected -> dag-executor CLI to a logfile (zero
 #          supervisor context spent on agent output).
-#        - any other phase            -> `claude -p "/dag-executor:auto-step --resume-run
+#        - any other phase            -> `claude -p "/loom:auto-step --resume-run
 #          <ckpt>" --model <model>` (fresh chat session, full skills/CLAUDE.md
 #          cold-start every iteration; phase boundary IS the refresh).
 #   5. Branch on exit code:
@@ -267,15 +267,15 @@ run_implement_phase() {
 
 run_claude_phase() {
   # Non-implement phases run as fresh `claude -p` sessions. The phase prompt
-  # `/dag-executor:auto-step --resume-run <ckpt>` reads the checkpoint and decides what
+  # `/loom:auto-step --resume-run <ckpt>` reads the checkpoint and decides what
   # work to do; the supervisor only consumes the exit code.
   local model="$1"
   local logfile="$2"
-  log "claude phase: ${CLAUDE_BIN} -p '/dag-executor:auto-step --resume-run ${CKPT}' --model ${model} ${CLAUDE_PERM_FLAGS} > ${logfile}"
+  log "claude phase: ${CLAUDE_BIN} -p '/loom:auto-step --resume-run ${CKPT}' --model ${model} ${CLAUDE_PERM_FLAGS} > ${logfile}"
   # Same set -e discipline as run_implement_phase — caller handles wrapping.
   local rc=0
   # shellcheck disable=SC2086
-  $CLAUDE_BIN -p "/dag-executor:auto-step --resume-run ${CKPT}" --model "$model" $CLAUDE_PERM_FLAGS >"$logfile" 2>&1 || rc=$?
+  $CLAUDE_BIN -p "/loom:auto-step --resume-run ${CKPT}" --model "$model" $CLAUDE_PERM_FLAGS >"$logfile" 2>&1 || rc=$?
   return $rc
 }
 
