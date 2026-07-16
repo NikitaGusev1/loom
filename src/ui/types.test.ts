@@ -48,4 +48,35 @@ describe('ui shared types', () => {
     assert.equal(dag.completedTasks, 1);
     assert.equal(task.status, 'running');
   });
+
+  it('keeps queue-backed run summaries and details structurally compatible with legacy UI rows', () => {
+    const queuedRun: UiDagListItem = {
+      path: '/repo/queued-work.json',
+      relativePath: 'queued-work.json',
+      eventLogPath: '/repo/queued-work.events.jsonl',
+      statePath: '/repo/queued-work.state.json',
+      id: 'queued-work',
+      title: 'Queued work',
+      status: 'queued',
+      totalTasks: 0,
+      completedTasks: 0,
+      failedTasks: 0,
+      runningTasks: 0,
+      updatedAt: '2026-07-11T00:00:00.000Z',
+      errors: [],
+    };
+    const detail: UiTaskSummary = {
+      id: 'queue-task',
+      name: 'Queue task',
+      status: 'queued',
+      layer: 0,
+      dependencies: [],
+      blockedBy: [],
+      rootFailures: [],
+    };
+
+    assert.equal(queuedRun.status, 'queued');
+    assert.equal(detail.dependencies.length, 0);
+    assert.equal(detail.blockedBy.length, 0);
+  });
 });
