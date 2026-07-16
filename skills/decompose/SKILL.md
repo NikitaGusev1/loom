@@ -287,10 +287,9 @@ Save to `.claude/ai/decomposition-YYYY-MM-DD-description.json`:
 
 When `--plan <plan-path>` was passed (Step 2), write the decomposition's path
 **back into the plan's YAML frontmatter** so downstream mode-selection can find
-it. Without this link, `/auto-implement` Phase 2 (and the supervised `/auto-run`
-Phase 2) read no `decomposition_path` → see `task_count=0` → silently route the
-plan to `sequential` and park at `sequential-not-supported`. This is the only
-mechanism that connects a decomposition to its plan.
+it. Automatic mode selection requires this validated evidence and hard-stops if
+the link is still absent or invalid after decomposition. This is the mechanism
+that connects a decomposition to its plan.
 
 Upsert the key into the plan file's `---` fenced frontmatter block:
 
@@ -382,6 +381,12 @@ Layer 2 (depends on Layer 1):
 | Coverage | PASS | Notes |
 ```
 
+Before presenting results, require `dag-executor --decomposition-stats <json-path>`
+to succeed against the saved project-local artifact. This is the schema-validity
+gate consumed by automatic mode selection. Run `--dag-readiness` additionally only
+when DAG execution is being forced; a one-task analysis artifact is intentionally
+stats-valid but readiness-invalid.
+
 ### Step 8: Present Results
 
 ```
@@ -416,5 +421,9 @@ Layer 1: [task names] → depends on Layer 0
   one subtask's completion criteria
 - **Limit to 15 subtasks maximum** — if decomposition produces more than 15 tasks,
   the granularity is likely too fine; consider merging related tasks
-- **Minimum 2 subtasks** — if the task decomposes into a single subtask, it's
-  already agent-sized and doesn't need decomposition; report this and stop
+- **Minimum 2 execution subtasks** — when invoked without `--plan`, if the task
+  decomposes into one subtask, report that it is already agent-sized and stop.
+  With `--plan`, still save, summarize, and link the schema-valid one-task DAG as
+  an **analysis artifact**. Its measured shape selects sequential mode; it must
+  not be described as parallel execution, and forced DAG remains subject to the
+  executor's `too-few-tasks` readiness gate.

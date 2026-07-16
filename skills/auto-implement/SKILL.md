@@ -28,7 +28,7 @@ Parse from `$ARGUMENTS`:
   - `--mode human` or `--human` opts into human mode
 - **Substrate** (optional): `--inline` forces the monolithic in-session engine (Phases 1–10 below). Default is the **supervised** flow (background supervisor, fresh context per phase) — see [Execution Substrate](#execution-substrate-decide-this-first-before-phase-1). Use `--inline` when you want one foreground context or are running a **sequential** plan (the supervisor is DAG-only).
 - **DAG mode** (optional): `--dag` forces the DAG executor for parallel implementation; `--no-dag` forces the sequential `/implement-plan` path. If neither is passed, mode is **auto-decided** by the Phase 2 thresholds based on the decomposition shape. (Mode = DAG-vs-sequential; substrate = supervised-vs-inline. A sequential mode always implies `--inline`.)
-  - Requires a `decomposition_path` in the plan's YAML frontmatter pointing to a `.claude/ai/decomposition-*.json` file
+  - Unless `--no-dag` is explicit, the entry preflight ensures `decomposition_path` points to a validated project-local `.claude/ai/decomposition-*.json` before selecting mode or substrate.
   - `--dag-model=opus|sonnet|haiku` sets the model for DAG agent worker sessions on the **inline** path (default: `sonnet`). In supervised mode the worker model comes from the auto-run models map (`mode-selected` key) — use `/auto-run --models` for fine control. Use `claude-opus-4-8` only when tasks are reasoning-heavy.
 - **Max retries** (optional): `--max-retries N` (default: 2)
 - **Verify simulator** (optional): `--verify-simulator` passes through to `/implement-plan` to enable screenshot + devtools log checks after each phase
@@ -77,17 +77,23 @@ The plugin-owned agents (`plan-reviewer`, `review-finder`, `review-verifier`) an
 This skill has two substrates for running the pipeline:
 
 - **Supervised (DEFAULT)** — launch the headless supervisor: each phase runs in a fresh `claude -p` context with a per-phase model map, the chat session only monitors gates, and the run is checkpointed/resumable. The chat context stays ≥70% free for the whole run. **Recommended.** The supervisor is **DAG-only**.
-- **Inline (`--inline`)** — run Phases 1–10 below **in this session**, in one long context. This is the only substrate that supports the **sequential** (`/implement-plan`) path, so it is the fallback for plans that do not decompose.
+- **Inline (`--inline`)** — run Phases 1–10 below **in this session**, in one long context. This is the only substrate that supports the **sequential** (`/implement-plan`) path.
 
 **Routing:**
 
-1. **Resolve mode** (DAG vs sequential) exactly as [Phase 2](#phase-2-mode-selection-dag-vs-sequential) does — honor `--dag`/`--no-dag`; otherwise peek the plan's `decomposition_path`, derive the inputs via `dag-executor --decomposition-stats "<decomposition_path>"`, and apply the Phase 2 thresholds. (This is a cheap frontmatter read + one CLI call; the supervised path re-runs the authoritative mode-selection phase itself.)
-2. **Resolve substrate:**
+1. **Ensure decomposition before resolving mode or substrate**:
+   - `--no-dag` is the sole bypass: select sequential without creating a decomposition.
+   - Otherwise read the plan's `decomposition_path`. Reuse it only when the file exists and `dag-executor --decomposition-stats "<decomposition_path>"` succeeds.
+   - If the link is absent, unreadable, or invalid, run `/decompose --plan <plan-path>`, then re-read the plan link and run `--decomposition-stats` again.
+   - If generation does not produce a linked artifact with valid statistics, **hard stop**. Never substitute `task_count=0`, `max_width=0`, or `has_heavy=false` for missing evidence.
+   - For forced `--dag`, also require `dag-executor --dag-readiness "<decomposition_path>"` to pass before launch. A one-task analysis DAG is valid mode evidence but is not execution-ready and must fail this gate.
+2. **Resolve mode** exactly as [Phase 2](#phase-2-mode-selection-dag-vs-sequential) does. Honor explicit flags; otherwise apply the thresholds to the validated statistics from step 1.
+3. **Resolve substrate:**
    - `--inline` passed → **inline**.
    - else mode resolved to **sequential** → **inline** (the supervisor cannot run sequential — log `Substrate: inline — supervised flow is DAG-only and this plan resolved sequential`).
    - else (mode = DAG) → **supervised** (default).
-3. **Dispatch:**
-   - **Supervised** → hand off to the `/auto-run` launcher: follow the procedure in `${CLAUDE_PLUGIN_ROOT}/skills/auto-run/SKILL.md` (init checkpoint → background supervisor → monitor gates), passing the plan path, `--mode <human|autonomous>`, and the resolved models. The supervisor runs the **same** Phases 1–10 defined below — do **not** also run them here. From this point this chat session **is** the auto-run monitor: ingest only compact checkpoint fields, route gates, never read plan/diff/review bodies. (Equivalent to the user running `/auto-run <plan> …` directly.)
+4. **Dispatch:**
+   - **Supervised** → hand off to the `/auto-run` launcher: follow the procedure in `${CLAUDE_PLUGIN_ROOT}/skills/auto-run/SKILL.md` (preflight → init checkpoint → background supervisor → monitor gates), passing the plan path, `--mode <human|autonomous>`, resolved models, and `--dag` when the user explicitly forced DAG. The supervisor runs the **same** Phases 1–10 defined below — do **not** also run them here. From this point this chat session **is** the auto-run monitor: ingest only compact checkpoint fields, route gates, never read plan/diff/review bodies. (Equivalent to the user running `/auto-run <plan> …` directly.)
    - **Inline** → run the phases below in this session.
 
 ## Orchestration Flow (Phases 1–10 — the inline engine; the supervised default runs these same phases via the supervisor)
@@ -116,27 +122,26 @@ This skill has two substrates for running the pipeline:
 > `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` and `CLAUDE.md` reference
 > this section — change thresholds here only.
 
-If `--dag` was passed: skip this phase, force DAG.
-If `--no-dag` was passed: skip this phase, force sequential.
-Otherwise auto-decide from the plan's `decomposition_path`:
+The entry preflight has already ensured and validated decomposition unless `--no-dag` was explicit. This phase reuses that result and never generates a second artifact.
 
-1. If no `decomposition_path` in plan frontmatter, OR the file does not exist: sequential (no DAG possible).
-2. Otherwise derive the three inputs **programmatically** — do NOT eyeball the JSON (a model misread `has_heavy` and parked a DAG-worthy run; see BACKLOG "Supervised /auto-run hardening"):
+If `--dag` was passed: force DAG after the preflight readiness gate.
+If `--no-dag` was passed: force sequential without decomposition.
+Otherwise derive the inputs **programmatically** from the ensured path — do NOT eyeball the JSON:
    ```bash
    dag-executor --decomposition-stats "<decomposition_path>"
    # → {"task_count":N,"max_width":N,"has_heavy":<bool>}
    ```
    `task_count`, `max_width`, `has_heavy` come straight from this JSON. The subcommand derives them from the Zod-validated DAG (`tasks.length` / `max(layer.taskIds.length)` / `some(weight==='heavy')`) so they cannot drift from what the executor runs.
-3. Promote to DAG if ANY of:
+1. Promote to DAG if ANY of:
    - `task_count >= 8`
    - `max_width >= 3`
    - `has_heavy === true`
-4. Log the decision verbatim:
+2. Log the decision verbatim:
    ```
    Mode: [dag|sequential] (auto) — task_count=N, max_width=N, has_heavy=[true|false]
    ```
-5. **Human mode**: present the decision and one-line rationale, allow override (`use --dag` / `use sequential`) before Phase 3.
-6. **Autonomous mode**: log and proceed.
+3. **Human mode**: present the decision and one-line rationale, allow override (`use --dag` / `use sequential`) before Phase 3. A sequential-to-DAG override must pass `--dag-readiness` first.
+4. **Autonomous mode**: log and proceed.
 
 Rationale: direct sequential bias is real on borderline jobs. Math beats vibes — let task shape decide.
 
@@ -147,10 +152,7 @@ Rationale: direct sequential bias is real on borderline jobs. Math beats vibes �
 **If DAG mode is selected** (parallel DAG execution, via `--dag` or auto-promotion in Phase 2):
 
 2. Read the plan's YAML frontmatter and extract the `decomposition_path` field
-3. Verify the decomposition JSON file exists at that path
-   - If missing, run `/decompose --plan <plan-path>` to create the decomposition from the plan
-   - This skips redundant research since the plan already has file references
-   - Use the resulting decomposition path for the executor
+3. Assert the preflight-validated decomposition still exists. If it does not, hard stop; do not regenerate after mode selection.
 4. Run `/implement-dag` with the decomposition path and model:
    - Pass the `<decomposition-path>` as the argument
    - Pass `--model=<dag-model>` where `<dag-model>` is from `--dag-model` (default: `claude-opus-4-8`)
@@ -178,7 +180,7 @@ Rationale: direct sequential bias is real on borderline jobs. Math beats vibes �
 
 **If sequential mode is selected** (no `--dag` and Phase 2 did not promote):
 
-> **Now plugin-shipped**: the sequential path uses `dag-executor:implement-plan`, which **ships with this plugin** — it is no longer consumer-supplied, so the sequential path is always available. (Fallback, only if a project deliberately shadows/removes it: promote to the DAG path — if the plan has a `decomposition_path`, run `/implement-dag` on it; else run `/decompose --plan <plan-path>` first, then `/implement-dag`. Tell the user. Halt only if neither path is possible.)
+> **Now plugin-shipped**: the sequential path uses `dag-executor:implement-plan`, which **ships with this plugin** — it is no longer consumer-supplied, so the sequential path is always available. If a project deliberately shadows or removes it, hard stop and tell the user; never change the measured mode after selection.
 
 2. Run `/implement-plan` with the plan path **plus `--orchestrated`** (and `--verify-simulator` if specified). The `--orchestrated` flag is required: it suppresses `/implement-plan`'s own self-contained finalize chain (simplify / fix-loop) so those are not double-run — this orchestrator owns simplify (Phase 6) and the fix loop (Phase 9). It leaves only the final `/code-review` step intact.
 3. The implement-plan skill handles:
@@ -204,7 +206,7 @@ This phase runs **post-merge**, after `/implement-plan` (or `--dag` execution) h
 
 2. **Resolve each component's `figmaRef`**:
    - Read the plan's YAML frontmatter and extract `decomposition_path`
-   - If `decomposition_path` is missing or the file does not exist, **short-circuit the component loop** — skip steps 3–5 entirely, jump directly to step 6 to write the aggregate summary using the phase-status marker `"no decomposition_path in plan frontmatter — figma diff phase skipped"`, then proceed to Phase 5.
+   - Under the explicit `--no-dag` bypass, if `decomposition_path` is missing, **short-circuit the component loop** — skip steps 3–5, write the aggregate summary marker `"no decomposition_path in plan frontmatter — figma diff phase skipped"`, then proceed to Phase 5. In every automatic/DAG run, a missing or unreadable ensured path is a hard error; do not downgrade it to a Figma skip.
    - Otherwise, load the decomposition JSON. For each modified component, find the originating task by matching the component's path against entries in `task.context.files`. Pull `task.context.figmaRef` from that task.
    - Components whose originating task has no `figmaRef` are **skipped silently**. Build the working list as `(componentPath, figmaRef)` pairs only for components that have a `figmaRef`.
 
@@ -412,7 +414,8 @@ Phase 1: Validate Plan
 Phase 2: Mode Selection (auto-decide DAG vs sequential)
     |-- --dag flag --> force DAG
     |-- --no-dag flag --> force sequential
-    |-- no decomposition_path --> sequential
+    |-- --no-dag --> sequential (explicit bypass)
+    |-- missing/invalid decomposition --> decompose + validate; hard stop on failure
     |-- task_count >= 8 OR max_width >= 3 OR has_heavy --> DAG
     |-- else --> sequential
     |
@@ -423,7 +426,8 @@ Phase 3: Implementation Complete
     |
     v
 Phase 4: Figma Verification (post-merge diff)
-    |-- No decomposition_path --> SKIP (still write summary noting skip)
+    |-- No decomposition_path + explicit --no-dag --> SKIP (still write summary noting skip)
+    |-- No decomposition_path in automatic/DAG run --> HARD ERROR
     |-- MCP connected --> spawn figma-differ per component, write per-component + aggregate reports, continue
     |-- MCP disconnected --> PAUSE (both modes), reconnect/skip/abort
     |
@@ -595,7 +599,7 @@ If any step fails unexpectedly (tool error, network issue, etc.):
 /auto-implement .claude/ai/plan-2026-02-11-add-user-auth.md --inline
 ```
 
-### Inline sequential plan (no decomposition → in-session `/implement-plan`):
+### Explicit inline sequential plan (`--no-dag` bypasses decomposition):
 
 ```
 /auto-implement .claude/ai/plan-2026-02-11-add-user-auth.md --inline --no-dag

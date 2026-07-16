@@ -275,6 +275,7 @@ run_case() {
   local count="${dir}/count"
   local ckpt="${dir}/ckpt.json"
   local logs="${dir}/logs"
+  local supervisor_log="${dir}/supervisor.log"
 
   "$dag_writer" "$dag"
   printf '%s\n' "$plan_body" >"$plan"
@@ -292,10 +293,13 @@ run_case() {
     LOOM_SUPERVISOR_CRASH_DELAY_SEC=0 \
     LOOM_SUPERVISOR_QUOTA_DELAY_SEC=0 \
     LOOM_SUPERVISOR_MAX_ATTEMPTS=5 \
-    node "$SUPERVISOR" --allow-dirty-repo "$dag" --provider=codex >/dev/null 2>&1
+    node "$SUPERVISOR" --allow-dirty-repo "$dag" --provider=codex >"$supervisor_log" 2>&1
   local rc=$?
   set -e
 
+  if [[ "$rc" != "$expected_rc" ]]; then
+    cat "$supervisor_log" >&2
+  fi
   assert_eq "${name}: exit" "$expected_rc" "$rc"
   assert_contains "${name}: backlog flag" "--backlog" "$inv"
   CASE_DIR="$dir"

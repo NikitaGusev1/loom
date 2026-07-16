@@ -53,9 +53,10 @@ Zod-validated DAG (`tasks.length` / `max(layer.taskIds.length)` /
 `some(weight==='heavy')`), so they cannot drift from what the executor runs.
 Parse the three values from its stdout JSON; never hold the full body.
 
-If the plan has no `decomposition_path` in its frontmatter, the referenced file
-does not exist, or the subcommand exits non-zero, treat `task_count = 0`,
-`max_width = 0`, `has_heavy = false` (sequential-only path).
+The launcher preflight must already have ensured a linked decomposition. If the
+plan has no `decomposition_path`, the file does not exist, or the subcommand
+exits non-zero, write `status:"error"` without advancing the phase and exit 1.
+Never manufacture zero-valued statistics from missing evidence.
 
 ### Decision logic
 
@@ -65,9 +66,9 @@ section and apply it verbatim. Do not copy the thresholds here: this section
 previously duplicated them, and two independent copies of the mode-promotion
 contract drift on the next threshold change.
 
-Respect explicit flags from the supervisor-level invocation arguments stored in
-the checkpoint (if a `forceMode` field is present with value `'dag'` or
-`'sequential'`, skip the math and use that value directly).
+Respect the explicit DAG override from the supervisor-level invocation stored in
+the checkpoint: if `forceMode` is `'dag'`, skip the math and use DAG directly.
+The only other valid value is `null`; supervised sequential forcing is unsupported.
 
 Log the decision verbatim (to stderr / audit trail):
 
@@ -100,8 +101,7 @@ fails closed: it writes `mode:"sequential"` but does **not** advance the phase,
 parking at the `sequential-not-supported` gate instead. The operator resolves
 the gate by either:
 
-- providing a decomposition and re-running so Phase 2 promotes to `dag`, or
-- running the legacy inline `/auto-implement` for the sequential plan, or
+- restarting through inline `/auto-implement` for the measured sequential plan, or
 - replying `abort` to stop the run.
 
 A sequential run must never reach `mode-selected` with a null `dagPath`.
@@ -111,7 +111,7 @@ A sequential run must never reach `mode-selected` with a null `dagPath`.
 | Code | Meaning |
 |------|---------|
 | `0` | Decision written successfully. DAG path: phase advanced to `mode-selected`; supervisor proceeds to Phase 3. Sequential path: `status:needs-decision` + `pendingGate:sequential-not-supported` written and phase left at `mode-selection`; supervisor parks at the gate (it does NOT advance). |
-| `1` | Checkpoint read/write failure or plan file unreadable; supervisor must inspect. |
+| `1` | Checkpoint read/write failure, plan unreadable, or ensured decomposition missing/invalid; phase writes `status:error` and supervisor must inspect. |
 
 ---
 
@@ -152,10 +152,10 @@ figma MCP disconnected — figma diff phase skipped explicitly
    sibling `style.ts` in the same directory. Skip all others silently.
 
 2. **Resolve `figmaRef` per component**  
-   Read `decomposition_path` from the plan's YAML frontmatter. If missing or
-   the file does not exist, **skip the component loop immediately** — jump to
-   step 6 with marker
-   `"no decomposition_path in plan frontmatter — figma diff phase skipped"`.  
+   Read `decomposition_path` from the plan's YAML frontmatter. The supervised
+   launcher ensured it before checkpoint init, so missing or unreadable data is
+   a hard error here; write `status:"error"` and exit 1 rather than recording a
+   successful Figma skip.
    Otherwise load the decomposition JSON and match each modified component path
    against `task.context.files` entries. Pull `task.context.figmaRef` from the
    matching task. Skip components whose task has no `figmaRef` (silent, noted

@@ -90,6 +90,8 @@ echo "ERROR: unexpected checkpoint.phase='$PHASE' — auto-step has nothing to r
 exit 1
 ```
 
+Phase 2 consumes only the launcher-ensured `decomposition_path`. Missing or invalid decomposition is a hard error (exit 1), never an implicit sequential decision.
+
 These are terminal or park states that the supervisor handles directly; `/auto-step` is never invoked with them.
 
 ---

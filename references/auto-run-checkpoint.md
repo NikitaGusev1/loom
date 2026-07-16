@@ -20,14 +20,17 @@ The checkpoint is the lightweight, single-JSON-snapshot analogue of the dag-exec
 | -------------- | --------------------------------- | ------------- | ------------------------------------------------------------------------ |
 | `runId`        | string                            | supervisor    | Stable identifier for the auto-run; never changes after `init`.          |
 | `planPath`     | string (repo-relative)            | supervisor    | Implementation plan markdown the run is executing.                       |
+| `planDigest`   | SHA-256 string                    | /auto-run init/migration | Immutable binding to the linked approved plan at launch.          |
 | `dagPath`      | string (repo-relative)            | supervisor    | DAG JSON (if `--dag` mode); empty/absent in sequential mode.             |
+| `decompositionDigest` | SHA-256 string              | /auto-run init/migration | Immutable binding to the validated plan-linked DAG at launch.     |
 | `reviewPath`   | string (repo-relative)            | supervisor    | Most recent review artifact path, when applicable.                       |
 | `phase`        | string                            | supervisor + phases | Current phase name. Enumerated values are owned by `auto-step.md`'s dispatch table (single source of truth): `validate-plan`, `mode-selection`, `mode-selected`, `reviewing`, `figma-verified`, `cleaned`, `simplified`, `evaluate-review`, `fix-issues`, plus terminal `done` / `aborted` / `error` / `needs-decision`. |
 | `retryCount`   | number                            | supervisor    | Per-phase retry counter, reset on phase transitions.                     |
-| `mode`         | `'sequential' \| 'dag' \| null`   | Phase 2 (Mode Selection) | Execution mode. `null` at init; set ONCE by Phase 2 from the decomposition shape. |
+| `mode`         | `'sequential' \| 'dag' \| null`   | Phase 2 (Mode Selection) | Execution mode. `null` at init; set ONCE by Phase 2 from the launcher-ensured decomposition shape. Missing/invalid decomposition is an error, not a sequential signal. |
+| `forceMode`    | `'dag' \| null`                    | /auto-run init | Preserves a validated explicit `--dag` override across launcher and Phase 2. Immutable after init. |
 | `runMode`      | `'human' \| 'autonomous'`         | /auto-run init | Gate dimension: whether judgment-phase gates pause for a human decision (`human`) or auto-route (`autonomous`). Written ONCE at init; **immutable** thereafter. |
 | `status`       | enum (see below)                  | supervisor + chat | High-level state.                                                    |
-| `pendingGate`  | string \| null                    | supervisor + phases | Name of the gate awaiting a human decision; `null` when not gated. Gate-name vocabulary (and human-facing prompts) is owned by `/auto-run`'s gate table in `skills/auto-run/SKILL.md` in the dag-executor plugin — includes `sequential-not-supported`, which Phase 2 writes when mode selection resolves `sequential` (the headless supervisor implements DAG mode only). |
+| `pendingGate`  | string \| null                    | supervisor + phases | Name of the gate awaiting a human decision; `null` when not gated. `sequential-not-supported` is a defensive legacy/corrupt-checkpoint guard; the direct launcher refuses measured sequential runs before checkpoint init. |
 | `decision`     | string \| null                    | **chat only** | The human's verdict for the pending gate.                                |
 | `models`       | object                            | /auto-run init | Model assignment per phase name (with a `default` fallback).             |
 | `lastUpdated`  | ISO-8601 string                   | helper        | Stamped on every merge write by the helper.                              |
@@ -48,9 +51,9 @@ The two writers MUST NOT contend on the same field:
 
 | Writer        | May write                                                                            | May NOT write                              |
 | ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------ |
-| **/auto-run init** | `runId`, `planPath`, `phase` (initial), `runMode`, `mode` (initial `null`), `status` (initial `running`), `retryCount` (initial `0`), `pendingGate`/`decision` (initial `null`), `models` | — (init-time only; never re-writes after launch) |
-| **chat session** | `decision`, and the `status` flip `needs-decision` -> `running` after a decision  | everything else (including `runMode`, which is immutable after init) |
-| **supervisor / headless phases** | `runId`, `planPath`, `dagPath`, `reviewPath`, `phase`, `retryCount`, `mode`, `status`, `pendingGate`, `models` | `runMode` (immutable after init); `decision` (chat owns it) — **except** the consuming phase MAY reset `decision` to `null` (and ONLY to `null`) immediately after reading it on the resume path; it may never set `decision` to a non-null value |
+| **/auto-run init/migration** | `runId`, `planPath`, `planDigest`, `decompositionDigest`, `forceMode`, `phase` (initial), `runMode`, `mode` (initial `null`), `status` (initial `running`), `retryCount` (initial `0`), `pendingGate`/`decision` (initial `null`), `models`; migration may atomically backfill both digest fields only when both are absent and canonical binding/validation passes | — (init-time only; digest migration is write-once) |
+| **chat session** | `decision`, and the `status` flip `needs-decision` -> `running` after a decision  | everything else (including immutable `runMode`, `forceMode`, `planDigest`, and `decompositionDigest`) |
+| **supervisor / headless phases** | `runId`, `planPath`, `dagPath`, `reviewPath`, `phase`, `retryCount`, `mode`, `status`, `pendingGate`, `models` | `runMode`, `forceMode`, `planDigest`, and `decompositionDigest` (immutable after init); `decision` (chat owns it) — **except** the consuming phase MAY reset `decision` to `null` (and ONLY to `null`) immediately after reading it on the resume path; it may never set `decision` to a non-null value |
 
 `runMode` (gate dimension: `human`/`autonomous`) is written ONCE by `/auto-run` at init and is never overwritten by any writer. It is distinct from `mode` (execution dimension: `sequential`/`dag`), which is `null` at init and set ONCE by Phase 2. Keeping these two orthogonal dimensions in separate fields is what prevents Phase 2's `mode` write from clobbering the gate-routing flag.
 

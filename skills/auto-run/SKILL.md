@@ -13,7 +13,7 @@ Thin launcher, monitor, and gate-router for the `/auto-implement` supervisor loo
 2. **Monitor** — poll the compact checkpoint (status, phase, pendingGate, counts only)
 3. **Gate** — surface `needs-decision` gates to the human, write `decision`, flip `status → running`
 
-**Context discipline**: The chat session holds no implementation work. It never reads plan files, review bodies, diffs, or supervisor logs. It only ingests compact checkpoint fields. This keeps the chat context ≥70% free for the lifetime of the run.
+**Context discipline**: Before checkpoint initialization, the launcher may read plan frontmatter, invoke `/decompose --plan`, and ingest only `task_count`, `max_width`, and `has_heavy` to ensure the run is DAG-capable. After launch it holds no implementation work and never reads plan bodies, review bodies, diffs, or supervisor logs; monitoring ingests compact checkpoint fields only.
 
 **Model philosophy**: Model is chosen by reasoning need, not window size. Opus 4.8 and Sonnet both have 200k context — model determines reasoning quality. Judgment phases get Opus 4.8; mechanical phases get Sonnet. User overrides apply at launch time.
 
@@ -25,6 +25,7 @@ Parse `$ARGUMENTS` to extract:
 
 - **Plan path** (required): the first positional argument ending in `.md`
 - **Mode**: `autonomous` if not specified; `human` only if `--mode human` or `--human` appears
+- **Forced execution mode**: explicit `dag` when `--dag` appears; otherwise unspecified. Direct `--no-dag` is unsupported because this launcher is DAG-only. For a new checkpoint, persist unspecified as `null`; for resume, an omitted flag reuses the stored value.
 - **Judgment model** (default `claude-opus-4-8`): from `--models judgment=<value>`
 - **Mechanical model** (default `claude-sonnet-4-6`): from `--models mechanical=<value>`
 - **Slug**: from `--slug <value>` if present; otherwise derived from the plan filename by stripping the `plan-` prefix and `.md` suffix (e.g. `plan-2026-06-04-vmm-7218.md` → `2026-06-04-vmm-7218`)
@@ -52,6 +53,25 @@ mkdir -p "$REPO_ROOT/.claude/ai/auto-run-logs"
 ```
 
 Use these variables verbatim in every subsequent Bash call. Never use `./` or `~` in paths passed to the supervisor or checkpoint helper.
+
+## Step 2.5 — Ensure Decomposition Before Checkpoint Init
+
+This bounded, idempotent preflight is the only plan-reading exception in the launcher:
+
+1. If `CKPT_PATH` already exists, read only `runId`, `planPath`, `planDigest`, `decompositionDigest`, `phase`, `mode`, `forceMode`, `status`, and `dagPath`. Resolve stored `planPath` against `REPO_ROOT` and require its canonical path to equal the requested plan. Require a non-empty `runId` and recognized status. When both digest fields exist, require SHA-256 of the current files to match them. When both are absent on a legacy checkpoint, first complete all canonical path, statistics, and readiness checks below, then atomically backfill both digests before resume; if only one digest exists, hard-stop as corrupt partial migration. When the invocation explicitly supplies `--dag`, require stored `forceMode` to match; when omitted, reuse the stored value. Hard-stop on conflict; a predictable slug must never select another plan's checkpoint.
+   - Resolve the plan's current `decomposition_path` canonically and require it to remain inside `REPO_ROOT`, equal canonical checkpoint `dagPath` when that field is present, and match immutable `decompositionDigest`. This binds a same-plan checkpoint to the exact validated artifact.
+   - When `dagPath` is present, require the bound artifact to pass both `dag-executor --decomposition-stats` and `dag-executor --dag-readiness`; reuse it without mutating the plan or replacing the checkpoint.
+   - When `dagPath` is null only in pre-selection phase `validate-plan` or `mode-selection`, validate the bound plan-linked artifact and preserve the existing checkpoint. A null path in any later phase is corrupt state and must hard-stop.
+2. For a new checkpoint, or a resumable pre-selection checkpoint without `dagPath`, read `decomposition_path` from plan frontmatter. Reuse it only if `dag-executor --decomposition-stats "$DECOMP_PATH"` succeeds.
+3. If absent or invalid, invoke `/decompose --plan <plan-path>`, re-read the linked path, and run `--decomposition-stats` again.
+4. If no valid path exists after generation, stop before Step 5. Missing or invalid evidence is a hard error, never zero-valued sequential statistics.
+5. If `--dag` was supplied, require `--dag-readiness` and select DAG regardless of automatic thresholds. Otherwise apply the authoritative thresholds from `auto-implement` to the validated JSON result.
+   - If measured mode is sequential, do **not** initialize or launch the DAG-only supervisor. Return: `Measured mode is sequential; run /auto-implement <plan-path> --inline, or use --dag only after an execution-ready decomposition passes dag-readiness.`
+   - If measured mode is DAG, require `dag-executor --dag-readiness "$DECOMP_PATH"` to pass, then continue.
+
+Log `Decomposition: reused|generated — path=<path>` and the standard measured mode line. Never load the decomposition body into chat context.
+For a new run, compute SHA-256 `planDigest` after the final frontmatter link is written and `decompositionDigest` from the validated project-local JSON; persist both at checkpoint init.
+Legacy digest backfill is a one-time migration, not permission to replace either value after it exists.
 
 ---
 
@@ -108,8 +128,11 @@ Initial JSON object (substitute real values before calling):
 {
   "runId": "<RUN_ID>",
   "planPath": "<repo-relative plan path>",
+  "planDigest": "<sha256 of linked approved plan>",
+  "decompositionDigest": "<sha256 of validated DAG JSON>",
   "phase": "validate-plan",
   "runMode": "<human|autonomous>",
+  "forceMode": "<dag|null>",
   "mode": null,
   "status": "running",
   "retryCount": 0,
@@ -131,6 +154,8 @@ Initial JSON object (substitute real values before calling):
 ```
 
 `planPath` must be stored **repo-relative** (strip `$REPO_ROOT/` prefix if the plan path is absolute). The supervisor resolves it via `resolve_repo_path`.
+`forceMode` preserves a validated explicit DAG override across the launcher/Phase 2 boundary.
+`planDigest` and `decompositionDigest` bind resume to the approved plan and exact validated DAG; they are immutable after init or validated legacy migration.
 
 Fields omitted from init (supervisor writes these later): `dagPath`, `reviewPath`.
 
@@ -261,7 +286,7 @@ Gate name → prompt:
 | `supervisor-halt`      | Supervisor triggered /handoff. Check logfile for halt reason. Decide abort or (if recoverable) continue. |
 | `phase-error-<phase>`  | Phase `<phase>` reported a hard error (exit 1) and the supervisor halted. Inspect the logfile for the failure, then abort or (if repaired) continue. |
 | `phase-pause-<phase>`  | Phase `<phase>` paused unexpectedly. Check logfile. Decide continue or abort. |
-| `sequential-not-supported` | Mode selection resolved `sequential`, which the headless supervisor does not support — it runs DAG mode only. Provide a decomposition and switch to dag, or run the legacy inline `/auto-implement`, or reply `abort` to stop. |
+| `sequential-not-supported` | Defensive legacy/corrupt-checkpoint guard: supervised Phase 2 resolved sequential even though the launcher only starts measured DAG runs. Abort and restart through `/auto-implement <plan> --inline`; do not manufacture a DAG merely to clear the gate. |
 
 For any unrecognized gate name, surface: `Supervisor paused at gate "<gate-name>". Inspect the checkpoint/log and decide: continue | abort`.
 
