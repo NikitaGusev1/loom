@@ -97,6 +97,62 @@ describe('ui inbox persistence', () => {
     assert.deepEqual(readInbox(projectDir).items[0], item);
   });
 
+  it('loads and validates optional queue links and revision proposals from schema v2', () => {
+    const path = getInboxPath(projectDir);
+    mkdirSync(dirname(path), { recursive: true });
+    const item = {
+      id: 'todo-1',
+      createdAt: 'now',
+      updatedAt: 'now',
+      body: 'Improve intake',
+      status: 'open',
+      source: 'ui',
+      linkedDagPath: null,
+      linkedTaskId: null,
+      linkedQueueId: 'queue-1',
+      proposal: { revision: 1, affectedFiles: ['src/ui/inbox.ts'] },
+    };
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 2,
+        items: [item],
+        jobs: [],
+        policy: { autoRunEnabled: true, confidenceThreshold: 0.85, triageProvider: 'codex' },
+      }),
+    );
+
+    assert.deepEqual(readInbox(projectDir).items[0], item);
+  });
+
+  it('rejects revision proposals with more than twenty affected files', () => {
+    const path = getInboxPath(projectDir);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 2,
+        items: [
+          {
+            id: 'todo-1',
+            createdAt: 'now',
+            updatedAt: 'now',
+            body: 'Improve intake',
+            status: 'open',
+            source: 'ui',
+            linkedDagPath: null,
+            linkedTaskId: null,
+            proposal: { revision: 1, affectedFiles: Array.from({ length: 21 }, (_, index) => `file-${index}`) },
+          },
+        ],
+        jobs: [],
+        policy: { autoRunEnabled: true, confidenceThreshold: 0.85, triageProvider: 'codex' },
+      }),
+    );
+
+    assert.throws(() => readInbox(projectDir), InboxParseError);
+  });
+
   it('rejects malformed clarification transcript fields', () => {
     const path = getInboxPath(projectDir);
     mkdirSync(dirname(path), { recursive: true });

@@ -11,6 +11,12 @@ import type {
 
 export type UiInboxStatus = 'open' | 'converted' | 'archived';
 
+/** A revision-specific, lightweight snapshot of a proposed DAG change. */
+export interface UiDagProposal {
+  revision: number;
+  affectedFiles: string[];
+}
+
 export interface UiInboxItem {
   id: string;
   createdAt: string;
@@ -20,6 +26,8 @@ export interface UiInboxItem {
   source: 'ui';
   linkedDagPath: string | null;
   linkedTaskId: string | null;
+  linkedQueueId?: string | null;
+  proposal?: UiDagProposal | null;
   intakeStatus?: UiIntakeStatus;
   triage?: UiTriageResult | null;
   approval?: UiApproval | null;

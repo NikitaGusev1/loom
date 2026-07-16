@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
-import type { UiInboxItem, UiInboxStatus } from './types.js';
+import type { UiDagProposal, UiInboxItem, UiInboxStatus } from './types.js';
 import {
   DEFAULT_INTAKE_POLICY,
   approvalSchema,
@@ -47,6 +47,21 @@ const nextId = (options?: CreateInboxOptions): string => options?.id?.() ?? `ui-
 
 const isStringOrNull = (value: unknown): value is string | null => typeof value === 'string' || value === null;
 
+const assertDagProposal = (proposal: unknown): UiDagProposal => {
+  if (!proposal || typeof proposal !== 'object') throw new Error('expected item.proposal object');
+  const candidate = proposal as Partial<UiDagProposal>;
+  if (!Number.isInteger(candidate.revision) || candidate.revision < 1) {
+    throw new Error('expected item.proposal.revision positive integer');
+  }
+  if (!Array.isArray(candidate.affectedFiles) || candidate.affectedFiles.length > 20) {
+    throw new Error('expected item.proposal.affectedFiles array with at most 20 entries');
+  }
+  if (!candidate.affectedFiles.every((file) => typeof file === 'string')) {
+    throw new Error('expected item.proposal.affectedFiles string entries');
+  }
+  return candidate as UiDagProposal;
+};
+
 const assertInboxItem = (item: unknown): UiInboxItem => {
   if (!item || typeof item !== 'object') throw new Error('expected inbox item object');
   const candidate = item as Partial<UiInboxItem>;
@@ -60,6 +75,10 @@ const assertInboxItem = (item: unknown): UiInboxItem => {
   if (candidate.source !== 'ui') throw new Error('expected item.source ui');
   if (!isStringOrNull(candidate.linkedDagPath)) throw new Error('expected item.linkedDagPath string or null');
   if (!isStringOrNull(candidate.linkedTaskId)) throw new Error('expected item.linkedTaskId string or null');
+  if (candidate.linkedQueueId !== undefined && !isStringOrNull(candidate.linkedQueueId)) {
+    throw new Error('expected item.linkedQueueId string or null');
+  }
+  if (candidate.proposal !== undefined && candidate.proposal !== null) assertDagProposal(candidate.proposal);
   if (candidate.intakeStatus !== undefined) intakeStatusSchema.parse(candidate.intakeStatus);
   if (candidate.triage !== undefined && candidate.triage !== null) triageResultSchema.parse(candidate.triage);
   if (candidate.approval !== undefined && candidate.approval !== null) approvalSchema.parse(candidate.approval);
