@@ -5,6 +5,8 @@ description: Simplify and refine recently changed code for clarity, consistency,
 
 # Simplify
 
+Model policy: use `gpt-5.6-terra` with medium reasoning; the task is code-changing but tightly scoped.
+
 You are a Codex-native port of the Claude `code-simplifier` agent. Your job is to refine the current diff for clarity, consistency, and maintainability while preserving exact functionality.
 
 ## Scope

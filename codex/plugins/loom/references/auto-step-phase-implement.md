@@ -1,17 +1,19 @@
 # Auto-Step Phase 3: Implement Contract
 
-Phase 3 of the `/auto-step` loop. The supervisor runs the dag-executor CLI **directly** — no `claude -p` wrapper, no chat session, **zero Claude context consumed**. The supervisor reads only the exit code and the run-total cost line from the logfile.
+Phase 3 of the `/auto-step` loop. The supervisor runs the dag-executor CLI **directly** — no `codex exec` wrapper, no orchestration session, **zero orchestration context consumed**. The supervisor reads only the exit code and the run-total cost line from the logfile.
 
 ## CLI Invocation
 
 ```bash
 dag-executor <dagPath> \
+  --provider=codex \
   --model=<worker-model> \
   > <logfile> 2>&1
 ```
 
 - `<dagPath>`: repo-relative path to `.claude/ai/decomposition-*.json`
-- `--model=<worker-model>`: one of `opus | sonnet | haiku`; dag-executor resolves to the full model ID and applies it to both `defaultModel` and `heavyModel` in `ExecutorConfig`
+- `--provider=codex`: required provider selection for worker sessions
+- `--model=<worker-model>`: `account-default` or an explicit Codex model ID applied to both `defaultModel` and `heavyModel`
 - `> <logfile> 2>&1`: redirects **both** stdout and stderr to the logfile — all dag-executor output uses `console.error` (stderr), so `2>&1` is required to capture it
 - `--resume`: add when re-running after a prior exit code 2
 
@@ -85,7 +87,7 @@ RUN_COST=$(grep "Total" "$logfile" | tail -1)
 ## Checkpoint Writes
 
 **Ownership: the supervisor — not a `/auto-step` phase body — owns ALL
-implement-phase checkpoint writes.** Phase 3 has no `claude -p` session and no
+implement-phase checkpoint writes.** Phase 3 has no `codex exec` session and no
 fragment body: the dag-executor CLI never touches the checkpoint. Every write
 below is performed by the supervisor shell around the CLI invocation, keyed off
 the dag-executor exit code.
@@ -139,7 +141,7 @@ These are **separate concerns**:
 
 | Concept | Location | Purpose |
 |---------|----------|---------|
-| `--model=opus\|sonnet\|haiku` | CLI flag to dag-executor | Sets the Claude model for **worker agent sessions** that run task implementations inside worktrees. Resolved by `src/index.ts` (Visma-Manager/dag-executor repo) into `defaultModel`/`heavyModel` in `ExecutorConfig`. |
+| `--provider=codex --model=<model>` | CLI flags to dag-executor | Selects Codex and the account default or explicit Codex model for worker sessions in isolated worktrees. |
 | `models` checkpoint field | `auto-run-<slug>.json` → `models` object | Records model assignments **per phase name** (with a `default` fallback) for the orchestration loop itself. Written by `/auto-run` at `init`. |
 
 The `--model` flag does NOT read or write the checkpoint `models` map. The checkpoint `models` map does NOT control what the dag-executor passes to agent sessions — the supervisor reads `models["mode-selected"] || models.default` to decide which `--model=` value to pass to the implement-phase dag-executor, but they are distinct fields.
@@ -152,7 +154,7 @@ The `--model` flag does NOT read or write the checkpoint `models` map. The check
 Phase 3: Implement
   - Driver:   supervisor shell (bash / node script)
   - Process:  dag-executor CLI (linked binary on PATH)
-  - Context:  ZERO Claude context consumed by the supervisor in this phase
+  - Context:  ZERO orchestration context consumed by the supervisor in this phase
   - Signal:   exit code only (0 / 1 / 2)
   - Cost:     grep "Total" <logfile> | tail -1
   - Duration: wall-clock time of CLI process (all parallelism internal to executor)

@@ -7,9 +7,11 @@ disable-model-invocation: true
 
 # Auto Step
 
-Headless single-phase runner for the `/auto-implement` supervisor loop. **One invocation executes exactly one pipeline phase**, then exits. The loop lives in the supervisor — never here. This is the refresh boundary: each phase gets a clean `claude -p` context.
+Headless single-phase runner for the `/auto-implement` supervisor loop. **One invocation executes exactly one pipeline phase**, then exits. The loop lives in the supervisor — never here. This is the refresh boundary: each phase gets a clean `codex exec` context.
 
-**Session model: set by the supervisor, not by this skill.** Each phase is launched as a one-shot `claude -p … --model <m>`, where `<m>` comes from the supervisor's **per-phase model map** (`models[phase] || models.default`, seeded by `/auto-run`: judgment phases → Opus 4.8, mechanical/routing phases → sonnet). A `-p` run can't `/model`-switch mid-session, so there is no in-session mandate to honor — the map is authoritative. (For a rare manual interactive `/auto-step` run, prefer Opus 4.8: the judgment phases want it.) Judgment phases (1, 7, 8) also spawn subagents internally pinned to Opus 4.8 regardless of the session model.
+**Session model: set by the supervisor, not by this skill.** Each phase is launched as a one-shot `codex exec`, where the optional explicit model comes from `models[phase] || models.default`. `account-default` omits the CLI model flag and uses the authenticated Codex account configuration.
+
+**Outcome contract:** `codex exec` may exit 0 even when the phase reports a logical hard stop. Every phase must therefore write its logical outcome to the checkpoint before returning. The supervisor infers success, pause, or failure from the resulting checkpoint status and phase.
 
 ## Exit Code Contract (Resumable Signal)
 
@@ -47,7 +49,7 @@ VALUE=$(dag-checkpoint get "$CKPT" fieldName)
 dag-checkpoint merge "$CKPT" '{"phase":"next-phase","status":"running"}'
 ```
 
-Schema reference: `${CLAUDE_PLUGIN_ROOT}/references/auto-run-checkpoint.md`
+Schema reference: `../../references/auto-run-checkpoint.md`
 
 ## Entry
 
@@ -73,14 +75,14 @@ Branch on `$PHASE` and execute **exactly one** phase body. The fragments are the
 
 | `checkpoint.phase` at invocation | Phase | Source |
 |----------------------------------|-------|--------|
-| `validate-plan` | 1 — Validate Plan | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-judgment.md` § "Phase 1: Validate Plan" |
-| `mode-selection` | 2 — Mode Selection | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` § "Phase 2 — Mode Selection" |
+| `validate-plan` | 1 — Validate Plan | `../../references/auto-step-phases-judgment.md` § "Phase 1: Validate Plan" |
+| `mode-selection` | 2 — Mode Selection | `../../references/auto-step-phases-mechanical.md` § "Phase 2 — Mode Selection" |
 | `mode-selected` | 3 — Implement | **Supervisor CLI only** — `/auto-step` is never invoked for this phase; see note below |
-| `reviewing` | 4 — Figma Verification | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` § "Phase 4 — Figma Verification (Post-Merge Diff)" |
-| `figma-verified` | 5 — Cleanup | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` § "Phase 5 — Cleanup" |
-| `cleaned` | 6 — Simplify | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-mechanical.md` § "Phase 6 — Simplify" |
-| `simplified` | 7 — Review Contract Validation | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-judgment.md` § "Phase 7: Review Contract Validation" |
-| `evaluate-review` | 8 — Evaluate Review | `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phases-judgment.md` § "Phase 8: Evaluate Review" |
+| `reviewing` | 4 — Figma Verification | `../../references/auto-step-phases-mechanical.md` § "Phase 4 — Figma Verification (Post-Merge Diff)" |
+| `figma-verified` | 5 — Cleanup | `../../references/auto-step-phases-mechanical.md` § "Phase 5 — Cleanup" |
+| `cleaned` | 6 — Simplify | `../../references/auto-step-phases-mechanical.md` § "Phase 6 — Simplify" |
+| `simplified` | 7 — Review Contract Validation | `../../references/auto-step-phases-judgment.md` § "Phase 7: Review Contract Validation" |
+| `evaluate-review` | 8 — Evaluate Review | `../../references/auto-step-phases-judgment.md` § "Phase 8: Evaluate Review" |
 | `fix-issues` | 9 — Fix Issues | See Phase 9 body below |
 
 Any other `$PHASE` value (`done`, `error`, `aborted`, `needs-decision`, or unknown):
@@ -100,15 +102,16 @@ These are terminal or park states that the supervisor handles directly; `/auto-s
 
 **`/auto-step` is never invoked when `checkpoint.phase == mode-selected`.**
 
-When Phase 2 writes `phase: mode-selected` and exits 0, the supervisor reads the checkpoint directly, then runs the dag-executor CLI instead of spawning a claude session:
+When Phase 2 writes `phase: mode-selected`, the supervisor reads the checkpoint directly, then runs the dag-executor CLI instead of spawning a Codex session:
 
 ```bash
 dag-executor <dagPath> \
+  --provider=codex \
   --model=<resolved: checkpoint.models["mode-selected"] || checkpoint.models.default> \
   > <logfile> 2>&1
 ```
 
-Zero Claude context is consumed during Phase 3. The supervisor maps dag-executor exit codes to checkpoint writes per `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phase-implement.md`. After Phase 3 exit 0, the supervisor writes `phase: reviewing` and re-enters the dispatch loop (which invokes `/auto-step` for Phase 4).
+Zero Codex orchestration context is consumed during Phase 3. The supervisor maps dag-executor exit codes to checkpoint writes per `../../references/auto-step-phase-implement.md`. After Phase 3 exit 0, the supervisor writes `phase: reviewing` and re-enters the dispatch loop (which invokes `/auto-step` for Phase 4).
 
 ---
 
@@ -194,9 +197,8 @@ Phase 3 is the only phase where exit 2 is possible from the dag-executor (`post-
 This skill is intended to be invoked by a supervisor process, not by a human directly. For reference, the supervisor loop is:
 
 1. Read `checkpoint.phase` after init (or after previous phase exit).
-2. If `phase == mode-selected`: run dag-executor CLI per `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phase-implement.md`; write checkpoint; re-read phase.
+2. If `phase == mode-selected`: run dag-executor CLI per `../../references/auto-step-phase-implement.md`; write checkpoint; re-read phase.
 3. If `phase` is terminal (`done`, `aborted`) or parked (`needs-decision`): stop / wait.
-4. Otherwise: `claude -p /auto-step --resume-run <ckpt> --model <phase-model>`
-   - Model selection from `checkpoint.models`, keyed by **phase name** with a `default` fallback (`models[phase] || models.default`): judgment-role phase names (`validate-plan`, `simplified`, `evaluate-review`) default to Opus 4.8; mechanical-role phase names (`mode-selection`, `reviewing`, `figma-verified`, `cleaned`, `fix-issues`) default to sonnet.
-5. Read exit code only. Branch per the exit code contract above.
+4. Otherwise: `codex exec '$loom:auto-step --resume-run <ckpt>'`, adding `--model <phase-model>` only for an explicit Codex model ID.
+5. Read the updated checkpoint. Treat `status:error` as hard stop, `status:needs-decision` as pause, and an advanced phase or terminal status as success. A session that exits without advancing or parking is a hard stop.
 6. On exit 2: wait for chat session to write `decision`, then go to step 4 for the same phase.

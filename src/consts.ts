@@ -67,8 +67,8 @@ export const DEFAULT_CONTEXT_WINDOW = 250_000;
 
 export const DEFAULT_EXECUTOR_MODELS = {
   provider: 'codex',
-  defaultModel: 'account-default',
-  heavyModel: 'account-default',
+  defaultModel: 'gpt-5.6-terra',
+  heavyModel: 'gpt-5.6-sol',
   maxTurns: 80,
   permissionMode: 'bypassPermissions',
   dagPath: '',

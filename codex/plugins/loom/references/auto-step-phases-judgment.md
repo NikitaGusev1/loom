@@ -5,13 +5,13 @@ self-contained execution contract for one judgment phase. The supervisor spawns
 a headless agent, passes it the checkpoint path and phase number, and the agent
 executes exactly this body — nothing more.
 
-**Default model for all three phases: `opus`.**  
+**Default model for all three phases: `gpt-5.6-sol` with high reasoning.**
 The supervisor selects the model from `checkpoint.models` keyed by **phase name**
 (`models[phase] || models.default`) — e.g. `models["validate-plan"]` for Phase 1,
 `models["simplified"]` for Phase 7, `models["evaluate-review"]` for Phase 8.
 The phase body documents the default; it does not call the model selector itself.
 
-**All checkpoint I/O must go through the `dag-checkpoint` helper (dag-executor plugin bin/, on PATH).**  
+**All checkpoint I/O must go through the `dag-checkpoint` helper (dag-executor plugin bin/, on PATH).**
 Never write checkpoint JSON directly. Never echo review bodies, diff output, or
 full plan text to stdout — ingest only YAML frontmatter fields and exit codes.
 
@@ -29,8 +29,8 @@ full plan text to stdout — ingest only YAML frontmatter fields and exit codes.
 
 ## Phase 1: Validate Plan
 
-**Orchestration position**: first phase, before any implementation.  
-**Default model**: `opus` (plan-reviewer subagent pinned to opus).  
+**Orchestration position**: first phase, before any implementation.
+**Default model**: `gpt-5.6-sol` with high reasoning.
 **Ingests**: plan YAML frontmatter `status` field + plan-reviewer verdict string only. Never reads the full plan body for routing decisions.
 
 ### Entry
@@ -92,7 +92,7 @@ opening `---` and the closing `---`). Extract the `status` field.
 
 ### Step 2 — Run plan-reviewer agent
 
-Spawn a `plan-reviewer` subagent (model: `opus`) with the plan path as its sole
+Spawn a `plan-reviewer` subagent with the plan path as its sole
 argument. The plan-reviewer validates file references, API/prop assumptions,
 persist whitelist, navigation wiring, translations, and testIDs against the
 actual codebase. Wait for completion.
@@ -155,8 +155,8 @@ exit 1
 
 ## Phase 7: Review Contract Validation
 
-**Orchestration position**: after Phase 6 (Simplify), before Phase 8.  
-**Default model**: `opus` (judgment/validation phase; no subagent dispatch).
+**Orchestration position**: after Phase 6 (Simplify), before Phase 8.
+**Default model**: `gpt-5.6-sol` with high reasoning (judgment/validation phase; no subagent dispatch).
 **Ingests**: review YAML frontmatter and per-finding contract lines emitted by the `/code-review` fan-out pipeline. Reads only enough finding-body structure to validate the required `**Triage:**`, `**Reason:**`, `**Backlog:**`, and `**BacklogReason:**` lines.
 
 ### Entry
@@ -242,8 +242,8 @@ hard fault.
 ## Phase 8: Evaluate Review
 
 **Orchestration position**: after Phase 7 (Review Contract Validation), or re-entered after
-Phase 9 (Fix Issues) cycles back through Phase 5 and Phase 6.  
-**Default model**: `opus` (all judgment; no generative code work in this phase).  
+Phase 9 (Fix Issues) cycles back through Phase 5 and Phase 6.
+**Default model**: `gpt-5.6-sol` with high reasoning (all judgment; no generative code work in this phase).
 **Ingests**: review YAML frontmatter verdict fields only (`triaged`,
 `verdict`, `critical_count`, `warning_count`, `plan_issue`, `fixable_by_ai`,
 `retry_recommended`, `backlog_count`). Never reads the full review body or

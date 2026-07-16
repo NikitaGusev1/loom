@@ -6,12 +6,12 @@ executes that phase's logic in **verdict-only** ingestion mode (numbers and
 markers only, never diffs or firehoses), writes the updated checkpoint, and
 exits with a status code the supervisor can branch on.
 
-**Default model for all mechanical phases: `sonnet`.**  
+**Default model:** `gpt-5.6-terra` with medium reasoning for code-changing work; `gpt-5.6-luna` with low reasoning for deterministic routing and read-heavy inspection.
 The supervisor reads the actual model from `checkpoint.models` at dispatch time.
 These phases are orchestration glue (read verdicts, branch on flags, write
 state) — no generative reasoning, no heavy lifting.
 
-**Checkpoint helper**: `dag-checkpoint` (dag-executor plugin bin/, on PATH)  
+**Checkpoint helper**: `dag-checkpoint` (dag-executor plugin bin/, on PATH)
 **Checkpoint schema**: `references/auto-run-checkpoint.md` in the dag-executor plugin
 
 ---
@@ -147,11 +147,11 @@ figma MCP disconnected — figma diff phase skipped explicitly
 
 ### Execution steps
 
-1. **Collect modified components**  
+1. **Collect modified components**
    `git diff --name-only [base]...HEAD` → filter to `.tsx` files that have a
    sibling `style.ts` in the same directory. Skip all others silently.
 
-2. **Resolve `figmaRef` per component**  
+2. **Resolve `figmaRef` per component**
    Read `decomposition_path` from the plan's YAML frontmatter. The supervised
    launcher ensured it before checkpoint init, so missing or unreadable data is
    a hard error here; write `status:"error"` and exit 1 rather than recording a
@@ -159,36 +159,36 @@ figma MCP disconnected — figma diff phase skipped explicitly
    Otherwise load the decomposition JSON and match each modified component path
    against `task.context.files` entries. Pull `task.context.figmaRef` from the
    matching task. Skip components whose task has no `figmaRef` (silent, noted
-   in summary). Build working list as `(componentPath, figmaRef)` pairs.  
+   in summary). Build working list as `(componentPath, figmaRef)` pairs.
    If the working list is empty after this step, skip to step 6 with marker
    `"no components had figmaRef — nothing to diff"`.
 
-3. **Check Figma MCP connectivity — once, before the component loop**  
+3. **Check Figma MCP connectivity — once, before the component loop**
    Call `mcp__figma-console__figma_get_status` exactly once.
 
    - **Connected and ready**: continue to step 4.
-   - **Disconnected (headless context)**:  
+   - **Disconnected (headless context)**:
      Write aggregate summary (step 6) with marker
      `"figma MCP disconnected — figma diff phase skipped explicitly"` and
-     **advance immediately — do not hang, do not pause, do not prompt**.  
-     Figma MCP in a bare `claude -p` headless session requires the Figma
+     **advance immediately — do not hang, do not pause, do not prompt**.
+     Figma MCP in a bare `codex exec` headless session requires the Figma
      desktop app + Console plugin running and connected to the local WebSocket
      bridge; if they are not, there is no mechanism to reconnect
      non-interactively. Logging the skip is the correct behavior —
      `/code-review` detects this marker in Phase 8 and notes the missing diff
      context in its report.
 
-4. **Construct Figma URL per component**  
+4. **Construct Figma URL per component**
    Use `figmaRef.url` directly when present. If `figmaRef.url` is absent, skip
    that component and note `"no figmaRef.url — cannot construct Figma URL"` in
    the aggregate summary.
 
-5. **Spawn `figma-differ` per component (parallel)**  
+5. **Spawn `figma-differ` per component (parallel)**
    Use the standard Agent-tool multi-call-in-one-message pattern. Each
    invocation receives `(figma_url, component_path)`. Each agent writes its own
    per-component report to `.claude/ai/figma-diff-YYYY-MM-DD-{component-name}.md`.
 
-6. **Write aggregate summary**  
+6. **Write aggregate summary**
    Always write `.claude/ai/figma-diff-summary-YYYY-MM-DD-{plan-slug}.md` —
    even when skipped. The file MUST contain exactly one of the four phase-status
    marker strings as a top-level line. Beyond the marker: list diffed
@@ -245,11 +245,11 @@ sufficient for the checkpoint record and for the audit log.
 
 ### Execution steps
 
-1. **Run `/cleanup`**  
-   In headless autonomous mode, prepend the instruction:  
+1. **Run `/cleanup`**
+   In headless autonomous mode, prepend the instruction:
    > "Skip Step 7 (Handle Hard Errors) entirely — classify all remaining
    > errors as skipped and proceed directly to Step 8. Do not prompt for user
-   > input."  
+   > input."
    The cleanup skill handles: ESLint + Prettier auto-fix (scoped to touched
    files), TypeScript + ESLint error detection, automatic fixing of easy errors,
    and (in human mode) prompting for hard errors.
@@ -257,7 +257,7 @@ sufficient for the checkpoint record and for the audit log.
 2. **Parse cleanup summary** for `files_fixed`, `errors_remaining`,
    `errors_skipped`.
 
-3. **Commit cleanup changes**  
+3. **Commit cleanup changes**
    ```bash
    git add -u  # stage modifications to already-tracked touched files (no TTY prompt)
    git commit -m "dag-executor: cleanup"
@@ -310,14 +310,14 @@ output. The binary kept/reverted outcome is sufficient.
 
 ### Execution steps
 
-1. **Collect modified source files**  
+1. **Collect modified source files**
    ```bash
    git diff --name-only develop...HEAD
    ```
    Filter to `.ts` and `.tsx` files. Exclude configs (e.g. `*.config.*`),
    snapshot files (`*.snap`), and generated files (`src/gql/`, codegen output).
 
-2. **Spawn `code-simplifier:code-simplifier` agent**  
+2. **Spawn `code-simplifier:code-simplifier` agent**
    Pass the filtered file list with this prompt (verbatim):
    ```
    Review the following files that were modified on this branch and simplify them.
@@ -336,7 +336,7 @@ output. The binary kept/reverted outcome is sufficient.
    - Prefer clarity over brevity — explicit code beats clever one-liners
    ```
 
-3. **Test bail**  
+3. **Test bail**
    ```bash
    yarn test --bail --changedSince=develop
    ```
@@ -380,15 +380,15 @@ writes to `decision`.
 ### No-hang guarantee (Phase 4 specifically)
 
 The pause-on-disconnected-MCP behavior in the interactive `/auto-implement`
-Phase 4 is **not present** in the headless phase body. Bare `claude -p`
+Phase 4 is **not present** in the headless phase body. Bare `codex exec`
 sessions cannot prompt for reconnection. The skip-with-marker path is the only
 valid headless branch when `figma_get_status` reports disconnected.
 
 ### Model selection
 
 The supervisor reads `checkpoint.models` and passes `--model` to the
-`claude -p` invocation. The phase bodies do not hard-code a model — they
-document that `sonnet` is the **default** if the `models` map has no entry for
+`codex exec` invocation. The phase bodies do not hard-code a model — the
+checkpoint map pins the efficient phase-specific default when no user override exists for
 the phase role. Override via the `models` map written at `/auto-run` init, or
 via `--dag-model` on the original `/auto-implement` invocation (mapped to the
 executor's `--model=` flag — the executor CLI itself has no `--dag-model`, and

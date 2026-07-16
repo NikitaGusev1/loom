@@ -32,7 +32,7 @@ export const parseTriageResult = (value: unknown, revision: number): UiTriageRes
 
 export class CodexTriageProvider implements TriageProvider {
   async triage(prompt: string, signal?: AbortSignal): Promise<unknown> {
-    const result = await runCodexCli(prompt, { model: 'account-default', signal });
+    const result = await runCodexCli(prompt, { model: 'gpt-5.6-luna', reasoningEffort: 'low', signal });
     return result.trace.lastAssistantText;
   }
 }

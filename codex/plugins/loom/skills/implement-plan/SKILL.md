@@ -5,7 +5,7 @@ description: "Execute an approved implementation plan phase by phase with test, 
 
 # Implement Plan
 
-**MANDATORY session model: sonnet.** This is the implementation tier — sonnet handles plan-driven coding with full quality. Opus wastes tokens on mechanical plan execution; haiku is too weak for code edits. Switch via `/model sonnet` before invoking.
+Use `gpt-5.6-terra` with medium reasoning for this implementation workflow unless the caller explicitly selects another Codex model.
 
 You are tasked with implementing an approved technical plan. These plans contain phases with specific changes and success criteria.
 

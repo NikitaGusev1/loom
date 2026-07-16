@@ -1,6 +1,6 @@
 {
   "name": "loom",
-  "version": "0.1.0+codex.20260714173905",
+  "version": "0.1.0+codex.20260716174445",
   "description": "Codex-native Loom and dag-executor skills for exploration, planning, decomposition, implementation, cleanup, review, explicit risk scanning, and supervised runs.",
   "author": {
     "name": "Nikita Gusev",

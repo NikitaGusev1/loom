@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # auto-run-smoke.sh — deterministic smoke harness for the auto-run supervisor.
 #
-# Drives .claude/scripts/auto-run-supervisor.sh over a fake checkpoint
-# progression using stubbed `claude -p` and dag-executor binaries (wired via the
-# supervisor's CLAUDE_BIN / DAG_EXECUTOR_BIN env seam). Makes no live model or
+# Drives scripts/auto-run-supervisor.sh over a fake checkpoint progression
+# using stubbed `codex exec` and dag-executor binaries (wired via the
+# supervisor's CODEX_BIN / DAG_EXECUTOR_BIN env seam). Makes no live model or
 # network calls.
 #
 # Asserts (each failure -> non-zero exit):
@@ -12,16 +12,16 @@
 #   2. chat-only-decision field ownership (chat write of `decision` and the
 #      needs-decision -> running status flip do not clobber supervisor fields).
 #   3. gate park -> decision -> resume across iterations.
-#   4. no-progress guard halts after NO_PROGRESS_LIMIT iterations and invokes
-#      /handoff.
-#   5. per-phase --model flag plumbed from models[phase] map for both claude
+#   4. a Codex process failure is a hard phase failure even when its raw exit
+#      code overlaps Loom's logical pause code.
+#   5. per-phase --model flag plumbed from models[phase] map for both codex
 #      and dag phases.
 #   6. implement phase runs as a CLI process to a logfile, with exit-code
 #      routing (0 advance, 1 halt, 2 park-with-retry-bump+--resume on next).
 #   7. resume-after-kill: kill the supervisor mid-stub, relaunch over the same
 #      checkpoint, confirm the first stub invocation reads the RECORDED phase
 #      (not the initial / phase 1).
-#   8. one fresh CLAUDE_BIN spawn per claude-phase (distinct PIDs per
+#   8. one fresh CODEX_BIN spawn per codex-phase (distinct PIDs per
 #      invocation) — mechanism proxy for distinct chat session IDs.
 
 set -euo pipefail
@@ -129,7 +129,7 @@ write_stub() {
 set -u
 
 case "$(basename "$0")" in
-  claude-stub*) KIND=claude ;;
+  codex-stub*) KIND=codex ;;
   dag-stub*)    KIND=dag ;;
   *)            KIND=unknown ;;
 esac
@@ -174,9 +174,9 @@ STUB
   chmod +x "$1"
 }
 
-CLAUDE_STUB="${SMOKE_TMP}/claude-stub.sh"
+CODEX_STUB="${SMOKE_TMP}/codex-stub.sh"
 DAG_STUB="${SMOKE_TMP}/dag-stub.sh"
-write_stub "$CLAUDE_STUB"
+write_stub "$CODEX_STUB"
 write_stub "$DAG_STUB"
 
 run_supervisor() {
@@ -185,7 +185,7 @@ run_supervisor() {
   env -i \
     PATH="$PATH" \
     HOME="$HOME" \
-    CLAUDE_BIN="$CLAUDE_STUB" \
+    CODEX_BIN="$CODEX_STUB" \
     DAG_EXECUTOR_BIN="$DAG_STUB" \
     STUB_INV_LOG="$inv_log" \
     STUB_PLAN_FILE="$plan" \
@@ -213,20 +213,22 @@ scenario_happy_path() {
     "runId":"smoke-happy",
     "phase":"validate-plan",
     "status":"running",
-    "models":{"validate-plan":"opus","mode-selection":"sonnet","mode-selected":"sonnet","reviewing":"haiku","default":"sonnet"},
+    "models":{"validate-plan":"gpt-5.6-sol","mode-selection":"account-default","mode-selected":"account-default","reviewing":"gpt-5.6-luna","default":"account-default"},
+    "reasoning":{"validate-plan":"high","mode-selection":"low","reviewing":"low","default":"medium"},
     "dagPath":"plans/fake-dag.json"
   }' >/dev/null
 
-  # Real phase chain: validate-plan (claude) -> mode-selection (claude, writes
+  # Real phase chain: validate-plan (codex) -> mode-selection (codex, writes
   # mode-selected) -> mode-selected (dag; the SUPERVISOR auto-advances to
   # reviewing on exit 0, so the dag stub does NOT write phase) -> reviewing
-  # (claude, parks at a gate) -> reviewing (claude, resume, done).
+  # (codex, parks at a gate) -> reviewing (codex, resume, done).
   {
-    printf 'claude\t0\t%s\n' '{"phase":"mode-selection"}'
-    printf 'claude\t0\t%s\n' '{"phase":"mode-selected"}'
+    printf 'codex\t0\t%s\n' '{"phase":"mode-selection"}'
+    printf 'codex\t0\t%s\n' '{"phase":"mode-selected"}'
     printf 'dag\t0\t\n'
-    printf 'claude\t2\t%s\n' '{"status":"needs-decision","pendingGate":"warnings-gate"}'
-    printf 'claude\t0\t%s\n' '{"status":"done"}'
+    # Codex itself exits 0; the supervisor must infer logical pause=2 from the checkpoint.
+    printf 'codex\t0\t%s\n' '{"status":"needs-decision","pendingGate":"warnings-gate"}'
+    printf 'codex\t0\t%s\n' '{"status":"done"}'
   } >"$plan"
 
   (
@@ -286,31 +288,35 @@ scenario_happy_path() {
   assert_contains 'supervisor logged resume' 'decision received; resuming loop' "$(cat "$sup_log")"
 
   local row1 row2 row3 row4 row5
-  row1="$(awk -F'\t' '$1=="claude"' "$inv" | sed -n '1p')"
-  row2="$(awk -F'\t' '$1=="claude"' "$inv" | sed -n '2p')"
+  row1="$(awk -F'\t' '$1=="codex"' "$inv" | sed -n '1p')"
+  row2="$(awk -F'\t' '$1=="codex"' "$inv" | sed -n '2p')"
   row3="$(awk -F'\t' '$1=="dag"'    "$inv" | sed -n '1p')"
-  row4="$(awk -F'\t' '$1=="claude"' "$inv" | sed -n '3p')"
-  row5="$(awk -F'\t' '$1=="claude"' "$inv" | sed -n '4p')"
+  row4="$(awk -F'\t' '$1=="codex"' "$inv" | sed -n '3p')"
+  row5="$(awk -F'\t' '$1=="codex"' "$inv" | sed -n '4p')"
 
-  assert_eq       'claude inv1 phase=validate-plan' 'validate-plan' "$(printf '%s' "$row1" | awk -F'\t' '{print $2}')"
-  assert_contains 'claude inv1 args have --model opus' '--model opus' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
+  assert_eq       'codex inv1 phase=validate-plan' 'validate-plan' "$(printf '%s' "$row1" | awk -F'\t' '{print $2}')"
+  assert_contains 'codex inv1 invokes the Loom auto-step skill' '$loom:auto-step' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
+  assert_contains 'codex inv1 args have --model gpt-5.6-sol' '--model gpt-5.6-sol' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
+  assert_contains 'codex inv1 pins high reasoning' 'model_reasoning_effort' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
 
-  assert_eq       'claude inv2 phase=mode-selection' 'mode-selection' "$(printf '%s' "$row2" | awk -F'\t' '{print $2}')"
-  assert_contains 'claude inv2 args have --model sonnet' '--model sonnet' "$(printf '%s' "$row2" | awk -F'\t' '{print $5}')"
+  assert_eq       'codex inv2 phase=mode-selection' 'mode-selection' "$(printf '%s' "$row2" | awk -F'\t' '{print $2}')"
+  assert_not_contains 'codex inv2 omits a literal account-default model' '--model account-default' "$(printf '%s' "$row2" | awk -F'\t' '{print $5}')"
+  assert_contains 'codex inv2 still pins low reasoning' 'model_reasoning_effort' "$(printf '%s' "$row2" | awk -F'\t' '{print $5}')"
 
   assert_eq       'dag inv1 phase=mode-selected' 'mode-selected' "$(printf '%s' "$row3" | awk -F'\t' '{print $2}')"
-  assert_contains 'dag inv1 args have --model=sonnet' '--model=sonnet' "$(printf '%s' "$row3" | awk -F'\t' '{print $5}')"
+  assert_contains 'dag inv1 explicitly selects Codex' '--provider=codex' "$(printf '%s' "$row3" | awk -F'\t' '{print $5}')"
+  assert_contains 'dag inv1 args have --model=account-default' '--model=account-default' "$(printf '%s' "$row3" | awk -F'\t' '{print $5}')"
 
-  assert_eq       'claude inv3 phase=reviewing (supervisor advanced after dag)' 'reviewing' "$(printf '%s' "$row4" | awk -F'\t' '{print $2}')"
-  assert_contains 'claude inv3 args have --model haiku' '--model haiku' "$(printf '%s' "$row4" | awk -F'\t' '{print $5}')"
+  assert_eq       'codex inv3 phase=reviewing (supervisor advanced after dag)' 'reviewing' "$(printf '%s' "$row4" | awk -F'\t' '{print $2}')"
+  assert_contains 'codex inv3 args have --model gpt-5.6-luna' '--model gpt-5.6-luna' "$(printf '%s' "$row4" | awk -F'\t' '{print $5}')"
 
-  assert_eq       'claude inv4 phase=reviewing (post-resume)' 'reviewing' "$(printf '%s' "$row5" | awk -F'\t' '{print $2}')"
+  assert_eq       'codex inv4 phase=reviewing (post-resume)' 'reviewing' "$(printf '%s' "$row5" | awk -F'\t' '{print $2}')"
 
-  local claude_count distinct_pids
-  claude_count="$(awk -F'\t' '$1=="claude"' "$inv" | wc -l | tr -d ' ')"
-  distinct_pids="$(awk -F'\t' '$1=="claude"{print $4}' "$inv" | sort -u | wc -l | tr -d ' ')"
-  assert_eq 'four claude-phase invocations' 4 "$claude_count"
-  assert_eq 'each claude invocation is a fresh spawn (distinct PIDs)' 4 "$distinct_pids"
+  local codex_count distinct_pids
+  codex_count="$(awk -F'\t' '$1=="codex"' "$inv" | wc -l | tr -d ' ')"
+  distinct_pids="$(awk -F'\t' '$1=="codex"{print $4}' "$inv" | sort -u | wc -l | tr -d ' ')"
+  assert_eq 'four codex-phase invocations' 4 "$codex_count"
+  assert_eq 'each codex invocation is a fresh spawn (distinct PIDs)' 4 "$distinct_pids"
 
   local impl_log_count
   impl_log_count="$(grep -c 'implement: ' "$sup_log" || true)"
@@ -323,7 +329,7 @@ scenario_happy_path() {
 }
 
 scenario_no_progress() {
-  section 'scenario 2: no-progress guard halts and writes /handoff'
+  section 'scenario 2: Codex transport exit 2 cannot masquerade as a Loom pause'
 
   local dir="${SMOKE_TMP}/noprogress"
   mkdir -p "$dir"
@@ -336,14 +342,14 @@ scenario_no_progress() {
     "runId":"smoke-noprogress",
     "phase":"validate-plan",
     "status":"running",
-    "models":{"default":"sonnet"}
+    "models":{"default":"account-default"}
   }' >/dev/null
 
   {
-    printf 'claude\t0\t\n'
-    printf 'claude\t0\t\n'
-    printf 'claude\t0\t\n'
-    printf 'claude\t0\t\n'
+    printf 'codex\t2\t\n'
+    printf 'codex\t0\t\n'
+    printf 'codex\t0\t\n'
+    printf 'codex\t0\t\n'
   } >"$plan"
 
   local sup_log="${dir}/sup.log"
@@ -353,23 +359,16 @@ scenario_no_progress() {
   local sup_rc=$?
   set -e
 
-  assert_eq 'supervisor exit 3 on no-progress halt' 3 "$sup_rc"
-  assert_contains 'no-progress log line emitted' 'no-progress:' "$(cat "$sup_log")"
-  assert_contains 'HALT message includes no-progress' 'HALT: no-progress' "$(cat "$sup_log")"
-
-  local handoff_args
-  handoff_args="$(awk -F'\t' '$1=="claude"{print $5}' "$inv" | grep -F '/handoff' || true)"
-  if [[ -n "$handoff_args" ]]; then
-    pass '/handoff dispatched via CLAUDE_BIN after halt'
-  else
-    fail '/handoff dispatched via CLAUDE_BIN after halt' 'no claude invocation contained /handoff'
-  fi
+  assert_eq 'supervisor exit 3 on Codex transport exit 2' 3 "$sup_rc"
+  assert_contains 'transport diagnostic emitted' 'process exited rc=2 without a checkpoint outcome' "$(cat "$sup_log")"
+  assert_contains 'HALT message references phase exit=1' 'HALT: phase validate-plan exit=1' "$(cat "$sup_log")"
+  assert_eq 'only one Codex phase was launched' 1 "$(awk -F'\t' '$1=="codex"{c++} END{print c+0}' "$inv")"
 
   assert_eq 'checkpoint status=error after halt' 'error' "$(node "$HELPER" get "$ckpt" status)"
 }
 
 scenario_implement_exit_1() {
-  section 'scenario 3: implement (dag) exit 1 routes to /handoff'
+  section 'scenario 3: implement (dag) exit 1 routes to a structured halt'
 
   local dir="${SMOKE_TMP}/dag-exit1"
   mkdir -p "$dir"
@@ -382,7 +381,7 @@ scenario_implement_exit_1() {
     "runId":"smoke-dag-exit1",
     "phase":"mode-selected",
     "status":"running",
-    "models":{"mode-selected":"sonnet"},
+    "models":{"mode-selected":"account-default"},
     "dagPath":"plans/fake-dag.json"
   }' >/dev/null
 
@@ -413,18 +412,18 @@ scenario_implement_exit_2() {
     "runId":"smoke-dag-exit2",
     "phase":"mode-selected",
     "status":"running",
-    "models":{"mode-selected":"sonnet","reviewing":"sonnet"},
+    "models":{"mode-selected":"account-default","reviewing":"account-default"},
     "dagPath":"plans/fake-dag.json",
     "retryCount":0
   }' >/dev/null
 
   # dag exit 2 (park + retry bump), then dag exit 0 (the SUPERVISOR advances
   # mode-selected -> reviewing on exit 0 — the dag stub writes no phase), then
-  # claude at reviewing exits done.
+  # codex at reviewing exits done.
   {
     printf 'dag\t2\t\n'
     printf 'dag\t0\t\n'
-    printf 'claude\t0\t%s\n' '{"status":"done"}'
+    printf 'codex\t0\t%s\n' '{"status":"done"}'
   } >"$plan"
 
   (
@@ -478,14 +477,14 @@ scenario_resume_after_kill() {
     "runId":"smoke-kill",
     "phase":"reviewing",
     "status":"running",
-    "models":{"reviewing":"haiku"}
+    "models":{"reviewing":"gpt-5.6-luna"}
   }' >/dev/null
 
-  printf 'claude\t0\t%s\n' '{"status":"done"}' >"$plan_first"
+  printf 'codex\t0\t%s\n' '{"status":"done"}' >"$plan_first"
 
   env -i \
     PATH="$PATH" HOME="$HOME" \
-    CLAUDE_BIN="$CLAUDE_STUB" \
+    CODEX_BIN="$CODEX_STUB" \
     DAG_EXECUTOR_BIN="$DAG_STUB" \
     STUB_INV_LOG="$inv_first" \
     STUB_PLAN_FILE="$plan_first" \
@@ -516,7 +515,7 @@ scenario_resume_after_kill() {
   wait "$sup_pid" 2>/dev/null || true
 
   local first_phase
-  first_phase="$(awk -F'\t' '$1=="claude"' "$inv_first" | sed -n '1p' | awk -F'\t' '{print $2}')"
+  first_phase="$(awk -F'\t' '$1=="codex"' "$inv_first" | sed -n '1p' | awk -F'\t' '{print $2}')"
   assert_eq 'pre-kill: stub saw phase=reviewing on disk' 'reviewing' "$first_phase"
 
   local ckpt_phase_after_kill ckpt_status_after_kill
@@ -525,12 +524,12 @@ scenario_resume_after_kill() {
   assert_eq 'post-kill: ckpt phase still reviewing (mutation did not land)' 'reviewing' "$ckpt_phase_after_kill"
   assert_eq 'post-kill: ckpt status still running (mutation did not land)' 'running'   "$ckpt_status_after_kill"
 
-  printf 'claude\t0\t%s\n' '{"status":"done"}' >"$plan_second"
+  printf 'codex\t0\t%s\n' '{"status":"done"}' >"$plan_second"
 
   set +e
   env -i \
     PATH="$PATH" HOME="$HOME" \
-    CLAUDE_BIN="$CLAUDE_STUB" \
+    CODEX_BIN="$CODEX_STUB" \
     DAG_EXECUTOR_BIN="$DAG_STUB" \
     STUB_INV_LOG="$inv_second" \
     STUB_PLAN_FILE="$plan_second" \
@@ -547,22 +546,22 @@ scenario_resume_after_kill() {
   assert_eq 'relaunch supervisor exits cleanly' 0 "$sup2_rc"
 
   local resume_phase
-  resume_phase="$(awk -F'\t' '$1=="claude"' "$inv_second" | sed -n '1p' | awk -F'\t' '{print $2}')"
+  resume_phase="$(awk -F'\t' '$1=="codex"' "$inv_second" | sed -n '1p' | awk -F'\t' '{print $2}')"
   assert_eq 'resume-after-kill: dispatch at RECORDED phase (not phase 1)' 'reviewing' "$resume_phase"
 }
 
 scenario_real_chain() {
-  section 'scenario 6: full real phase chain (dag fires once at mode-selected; claude at every other phase)'
+  section 'scenario 6: full real phase chain (dag fires once at mode-selected; codex at every other phase)'
 
   # Drives the supervisor over the REAL phase vocabulary from auto-step.md's
   # dispatch table (single source of truth) end to end:
   #   validate-plan -> mode-selection -> mode-selected -> reviewing ->
   #   figma-verified -> cleaned -> simplified -> evaluate-review -> done
-  # Each claude phase writes the NEXT phase; the dag (implement) phase writes
+  # Each codex phase writes the NEXT phase; the dag (implement) phase writes
   # nothing — the SUPERVISOR advances mode-selected -> reviewing on dag exit 0.
   # This is the assertion that catches C1-class Phase 2 -> Phase 3 vocab drift:
   # if the supervisor stops triggering dag on `mode-selected`, the dag stub
-  # fires 0 times (or claude gets spawned at mode-selected) and these fail.
+  # fires 0 times (or codex gets spawned at mode-selected) and these fail.
 
   local dir="${SMOKE_TMP}/realchain"
   mkdir -p "$dir"
@@ -578,28 +577,28 @@ scenario_real_chain() {
     "runMode":"autonomous",
     "mode":null,
     "models":{
-      "validate-plan":"opus",
-      "mode-selection":"sonnet",
-      "mode-selected":"sonnet",
-      "reviewing":"sonnet",
-      "figma-verified":"sonnet",
-      "cleaned":"sonnet",
-      "simplified":"opus",
-      "evaluate-review":"opus",
-      "default":"sonnet"
+      "validate-plan":"gpt-5.6-sol",
+      "mode-selection":"account-default",
+      "mode-selected":"account-default",
+      "reviewing":"account-default",
+      "figma-verified":"account-default",
+      "cleaned":"account-default",
+      "simplified":"gpt-5.6-sol",
+      "evaluate-review":"gpt-5.6-sol",
+      "default":"account-default"
     },
     "dagPath":"plans/fake-dag.json"
   }' >/dev/null
 
   {
-    printf 'claude\t0\t%s\n' '{"phase":"mode-selection"}'
-    printf 'claude\t0\t%s\n' '{"phase":"mode-selected"}'
+    printf 'codex\t0\t%s\n' '{"phase":"mode-selection"}'
+    printf 'codex\t0\t%s\n' '{"phase":"mode-selected"}'
     printf 'dag\t0\t\n'
-    printf 'claude\t0\t%s\n' '{"phase":"figma-verified"}'
-    printf 'claude\t0\t%s\n' '{"phase":"cleaned"}'
-    printf 'claude\t0\t%s\n' '{"phase":"simplified"}'
-    printf 'claude\t0\t%s\n' '{"phase":"evaluate-review"}'
-    printf 'claude\t0\t%s\n' '{"phase":"done","status":"done"}'
+    printf 'codex\t0\t%s\n' '{"phase":"figma-verified"}'
+    printf 'codex\t0\t%s\n' '{"phase":"cleaned"}'
+    printf 'codex\t0\t%s\n' '{"phase":"simplified"}'
+    printf 'codex\t0\t%s\n' '{"phase":"evaluate-review"}'
+    printf 'codex\t0\t%s\n' '{"phase":"done","status":"done"}'
   } >"$plan"
 
   local sup_log="${dir}/sup.log"
@@ -618,16 +617,16 @@ scenario_real_chain() {
   assert_eq 'dag stub fires exactly once across the whole chain' 1 "$dag_count"
   assert_eq 'the single dag invocation is at phase=mode-selected' 'mode-selected' "$dag_phase"
 
-  # No claude spawn ever happens at mode-selected (it is supervisor-CLI only).
-  local claude_at_modeselected
-  claude_at_modeselected="$(awk -F'\t' '$1=="claude" && $2=="mode-selected"' "$inv" | wc -l | tr -d ' ')"
-  assert_eq 'no claude spawn at mode-selected (supervisor-CLI only)' 0 "$claude_at_modeselected"
+  # No codex spawn ever happens at mode-selected (it is supervisor-CLI only).
+  local codex_at_modeselected
+  codex_at_modeselected="$(awk -F'\t' '$1=="codex" && $2=="mode-selected"' "$inv" | wc -l | tr -d ' ')"
+  assert_eq 'no codex spawn at mode-selected (supervisor-CLI only)' 0 "$codex_at_modeselected"
 
-  # (b) claude stub fires at every other non-terminal phase, in order.
-  local claude_phases expected_phases
-  claude_phases="$(awk -F'\t' '$1=="claude"{print $2}' "$inv" | tr '\n' ',')"
+  # (b) codex stub fires at every other non-terminal phase, in order.
+  local codex_phases expected_phases
+  codex_phases="$(awk -F'\t' '$1=="codex"{print $2}' "$inv" | tr '\n' ',')"
   expected_phases="validate-plan,mode-selection,reviewing,figma-verified,cleaned,simplified,evaluate-review,"
-  assert_eq 'claude fires at every non-implement phase, in dispatch-table order' "$expected_phases" "$claude_phases"
+  assert_eq 'codex fires at every non-implement phase, in dispatch-table order' "$expected_phases" "$codex_phases"
 }
 
 scenario_sequential_not_supported() {
@@ -658,7 +657,7 @@ scenario_sequential_not_supported() {
     "mode":"sequential",
     "dagPath":null,
     "retryCount":0,
-    "models":{"mode-selected":"sonnet","default":"sonnet"}
+    "models":{"mode-selected":"account-default","default":"account-default"}
   }' >/dev/null
 
   # Operator side: on seeing needs-decision, capture the gate, then abort.
@@ -709,7 +708,7 @@ scenario_sequential_not_supported() {
   # No handoff_and_exit: no HALT line, no /handoff dispatch.
   assert_not_contains 'no HALT (did not handoff_and_exit)' 'HALT:' "$(cat "$sup_log")"
   local handoff_args
-  handoff_args="$(awk -F'\t' '$1=="claude"{print $5}' "$inv" | grep -F '/handoff' || true)"
+  handoff_args="$(awk -F'\t' '$1=="codex"{print $5}' "$inv" | grep -F '/handoff' || true)"
   assert_eq 'no /handoff dispatched' '' "$handoff_args"
 
   # retryCount NOT bumped (fail-closed park is not a retryable dag pause).

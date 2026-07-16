@@ -5,6 +5,8 @@ description: "Explicitly scan code adjacent to recent changes through integratio
 
 # Risk Scan
 
+Model policy: use `gpt-5.6-terra` with high reasoning for finder/verifier agents; keep the existing bounded fan-out to control token use.
+
 Run a bounded, non-blocking project-health scan. This workflow is explicit only: never invoke it from `auto-implement`, `auto-run`, `implement-plan`, or `code-review`, and never feed ambient findings into an automatic fix loop.
 
 ## Artifact And Helper Contracts

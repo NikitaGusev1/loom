@@ -22,6 +22,12 @@ const getMaxTurns = (weight: DAGTask['weight'], config: ExecutorConfig): number 
 const getModelForWeight = (weight: DAGTask['weight'], config: ExecutorConfig): string =>
   weight === 'heavy' ? config.heavyModel : config.defaultModel;
 
+const getReasoningForWeight = (weight: DAGTask['weight']): 'low' | 'medium' | 'high' => {
+  if (weight === 'heavy') return 'high';
+  if (weight === 'trivial') return 'low';
+  return 'medium';
+};
+
 const ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash', 'Agent', 'Notebook'];
 export const TRIVIAL_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash'];
 
@@ -70,6 +76,7 @@ export const runQuery = async (
     if (config.provider === 'codex') {
       return await runCodexCli(prompt, {
         model: getModelForWeight(weight, config),
+        reasoningEffort: getReasoningForWeight(weight),
         ...(opts?.cwd && { cwd: opts.cwd }),
         ...(opts?.signal && { signal: opts.signal }),
       });

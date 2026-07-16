@@ -2,7 +2,8 @@
 name: risk-verifier
 description: Read-only adversarial verifier for exactly one risk-scan candidate. Re-reads cited code, attempts refutation, and returns a stable risk-specific outcome.
 tools: Glob, Grep, LS, Read, Bash
-model: claude-sonnet-5
+model: gpt-5.6-terra
+model_reasoning_effort: high
 color: pink
 phase: review
 ---

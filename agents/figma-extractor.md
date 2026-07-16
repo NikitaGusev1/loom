@@ -2,7 +2,8 @@
 name: figma-extractor
 description: Extracts Figma design data via a reusable extraction script — loads codebase context first (design tokens, similar components), outputs a design specification with token mapping. Uses only figma-console MCP tools. Oriented toward React Native / styled-components output; adapt the layout vocabulary if your project targets a different UI stack.
 tools: Read, Grep, Glob, Bash, mcp__figma-console__figma_execute, mcp__figma-console__figma_take_screenshot, mcp__figma-console__figma_navigate, mcp__figma-console__figma_get_status
-model: haiku
+model: gpt-5.6-luna
+model_reasoning_effort: low
 color: cyan
 phase: research
 ---

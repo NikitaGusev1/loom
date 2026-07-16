@@ -2,7 +2,8 @@
 name: dag-review-finder
 description: Generic dimension finder for parallel DAG review. Receives one dimension brief plus the DAG JSON, source spec, and a repo-access note via its dispatch prompt, hunts that single dimension across the decomposition DAG, and returns findings as structured text. Dispatched N-at-a-time (one per dimension) by an orchestrating dag-review flow — never invoked standalone.
 tools: Glob, Grep, LS, Read, Bash
-model: claude-opus-4-8
+model: gpt-5.6-terra
+model_reasoning_effort: high
 color: red
 phase: planning
 ---

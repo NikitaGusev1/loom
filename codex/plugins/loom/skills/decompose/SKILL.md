@@ -5,6 +5,8 @@ description: "Decompose an approved implementation plan into a DAG JSON for dag-
 
 # Decompose
 
+Model policy: use `gpt-5.6-sol` with high reasoning because dependency design and contract coverage are judgment-heavy.
+
 Create a DAG from an approved plan.
 
 ## Artifact Repository

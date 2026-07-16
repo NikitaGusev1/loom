@@ -3,25 +3,23 @@
 #
 # Per iteration:
 #   1. Read checkpoint (status, phase, models, dagPath, retryCount) via the helper.
-#   2. Terminal status (done|aborted) -> exit. status=error -> halt+/handoff.
+#   2. Terminal status (done|aborted) -> exit. status=error -> structured halt.
 #      status=needs-decision -> park (poll, do NOT relaunch) until chat flips
 #      it back to running.
-#   3. Pick `models[phase]` from the checkpoint (default: sonnet).
+#   3. Pick `models[phase]` from the checkpoint (default: account-default).
 #   4. Run the phase in a fresh process:
 #        - phase=mode-selected -> dag-executor CLI to a logfile (zero
 #          supervisor context spent on agent output).
-#        - any other phase            -> `claude -p "/dag-executor:auto-step --resume-run
-#          <ckpt>" --model <model>` (fresh chat session, full skills/CLAUDE.md
+#        - any other phase            -> `codex exec "$loom:auto-step --resume-run
+#          <ckpt>"` (fresh Codex session, full skills/project instructions
 #          cold-start every iteration; phase boundary IS the refresh).
-#   5. Branch on exit code:
-#        0  advance (sub-process wrote the next phase to the checkpoint).
-#        1  halt+/handoff (phase reported a hard error).
-#        2  park-or-resume (sub-process wrote needs-decision; chat decides).
+#   5. Infer the phase result from the checkpoint. `codex exec` reports whether
+#      the agent session itself completed, not the auto-step's logical 0/1/2.
 #   6. Safety guards: max iterations, max wall-clock, and a no-progress check
 #      (phase unchanged AND checkpoint content unchanged across an iteration ->
-#      halt+/handoff instead of relaunching forever).
+#      halt instead of relaunching forever).
 #
-# Binary seam: CLAUDE_BIN and DAG_EXECUTOR_BIN are env-overridable so the
+# Binary seam: CODEX_BIN and DAG_EXECUTOR_BIN are env-overridable so the
 # smoke harness (task-smoke) can stub them to drive the loop deterministically.
 
 set -euo pipefail
@@ -30,16 +28,17 @@ set -euo pipefail
 # Config (override via env)
 # --------------------------------------------------------------------------
 
-CLAUDE_BIN="${CLAUDE_BIN:-claude}"
-# Headless `claude -p` has no human to answer permission prompts, so every chat
-# phase (and the /handoff call) runs with permissions bypassed — otherwise tool
+CODEX_BIN="${CODEX_BIN:-codex}"
+# Headless `codex exec` has no human to answer permission prompts, so every chat
+# phase runs with approvals and the inner sandbox bypassed — otherwise tool
 # calls (dag-checkpoint, Edit, Bash, the dag-executor CLI, subagents) come back
 # un-actioned, the phase exits 0 having mutated nothing, and the no-progress
 # guard halts the run. This is required for BOTH human and autonomous modes: the
 # human/autonomous split governs gate decisions, not per-tool approval — every
-# phase is always a headless -p session. Override to "" only in a sandbox where
+# phase is always a headless Codex session. Override to "" only in an externally
+# sandboxed environment where
 # the needed tools are pre-allowlisted.
-CLAUDE_PERM_FLAGS="${AUTO_RUN_CLAUDE_PERM_FLAGS:---dangerously-skip-permissions}"
+CODEX_PERM_FLAGS="${AUTO_RUN_CODEX_PERM_FLAGS:---dangerously-bypass-approvals-and-sandbox --ephemeral}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 # DAG_EXECUTOR_CMD is an argv array (kept for parity with the env seam below).
 # The DAG_EXECUTOR_BIN env seam keeps command-string semantics (intentional
@@ -77,7 +76,7 @@ Usage: auto-run-supervisor.sh <checkpoint-path>
                    .claude/scripts/auto-run-checkpoint.cjs init <path> <json>.
 
 Env overrides:
-  CLAUDE_BIN                 default: claude
+  CODEX_BIN                  default: codex
   DAG_EXECUTOR_BIN           default: dag-executor (resolved from PATH; npm link)
   AUTO_RUN_MAX_ITER          default: 40
   AUTO_RUN_MAX_WALLCLOCK_SEC default: 21600 (6h)
@@ -135,17 +134,39 @@ ckpt_fingerprint() {
 
 model_for_phase() {
   # Resolve models[phase] from the checkpoint. Falls back to models.default,
-  # then to "sonnet". Worker-model contract for dag-executor accepts
-  # opus|sonnet|haiku; for claude -p the value is passed through to --model
-  # as-is and Claude resolves aliases.
+  # then to the authenticated Codex account default.
   local phase="$1"
   node -e '
     const ck = require(process.argv[1]);
     const state = ck.read(process.argv[2]) || {};
     const models = state.models || {};
     const phase = process.argv[3];
-    const m = models[phase] || models.default || "sonnet";
+    const m = models[phase] || models.default || "account-default";
     process.stdout.write(String(m));
+  ' "$CKPT_HELPER" "$CKPT" "$phase"
+}
+
+reasoning_for_phase() {
+  # Resolve reasoning[phase] from the checkpoint, then use the lowest default
+  # appropriate to the phase's work. This is independent from model choice so
+  # callers can tune cost without changing the selected Codex tier.
+  local phase="$1"
+  node -e '
+    const ck = require(process.argv[1]);
+    const state = ck.read(process.argv[2]) || {};
+    const phase = process.argv[3];
+    const configured = state.reasoning || {};
+    const defaults = {
+      "validate-plan": "high",
+      "mode-selection": "low",
+      "reviewing": "low",
+      "figma-verified": "medium",
+      "cleaned": "medium",
+      "simplified": "high",
+      "evaluate-review": "high",
+      "fix-issues": "medium",
+    };
+    process.stdout.write(String(configured[phase] || configured.default || defaults[phase] || "medium"));
   ' "$CKPT_HELPER" "$CKPT" "$phase"
 }
 
@@ -159,13 +180,11 @@ resolve_repo_path() {
 }
 
 handoff_and_exit() {
-  # Halt path: write error status, invoke /handoff in a fresh claude session
-  # so the human gets a structured handoff doc, then exit non-zero.
+  # Halt path: preserve the structured reason in the checkpoint. Do not launch
+  # another model session merely to restate a supervisor failure.
   local reason="$1"
-  log "HALT: ${reason} — invoking /handoff"
-  ck_merge "{\"status\":\"error\",\"pendingGate\":\"supervisor-halt\"}" || true
-  # shellcheck disable=SC2086
-  $CLAUDE_BIN -p "/handoff supervisor halt: ${reason}" $CLAUDE_PERM_FLAGS >"${LOG_DIR}/handoff-$(date -u +%Y%m%dT%H%M%SZ).log" 2>&1 || true
+  log "HALT: ${reason}"
+  ck_merge "{\"status\":\"error\",\"pendingGate\":\"supervisor-halt\",\"haltReason\":$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$reason")}" || true
   exit 3
 }
 
@@ -212,7 +231,7 @@ park_on_decision() {
 }
 
 run_implement_phase() {
-  # Phase 3: dag-executor CLI direct. ZERO supervisor Claude context spent.
+  # Phase 3: dag-executor CLI direct. ZERO supervisor Codex context spent.
   # Reads exit code only; the run-total cost line (the `Total` table row from
   # dagCostSummary — see references/auto-step-phase-implement.md in this plugin) is
   # grepped post-exit for the supervisor log.
@@ -238,7 +257,7 @@ run_implement_phase() {
     extra+=(--resume)
   fi
 
-  log "implement: ${DAG_EXECUTOR_CMD[*]} ${dag_path} --model=${model} ${extra[*]:-} > ${logfile}"
+  log "implement: ${DAG_EXECUTOR_CMD[*]} ${dag_path} --provider=codex --model=${model} ${extra[*]:-} > ${logfile}"
 
   # Caller wraps this call in `set +e ... set -e`. Do NOT re-enable set -e here:
   # if we did, `return $rc` with non-zero rc would trigger the abort path before
@@ -246,7 +265,7 @@ run_implement_phase() {
   # bash 3.2 (macOS default) errors on "${empty_array[@]}" under set -u; guard
   # with the parameter-expansion idiom.
   local rc=0
-  "${DAG_EXECUTOR_CMD[@]}" "$dag_path" --model="$model" ${extra[@]+"${extra[@]}"} >"$logfile" 2>&1 || rc=$?
+  "${DAG_EXECUTOR_CMD[@]}" "$dag_path" --provider=codex --model="$model" ${extra[@]+"${extra[@]}"} >"$logfile" 2>&1 || rc=$?
 
   # Run-total cost: the `Total` table row from dagCostSummary (logger.ts:120)
   # — note: capital-T `Total`, NOT a `COST`-labeled line.
@@ -265,18 +284,41 @@ run_implement_phase() {
   return $rc
 }
 
-run_claude_phase() {
-  # Non-implement phases run as fresh `claude -p` sessions. The phase prompt
-  # `/dag-executor:auto-step --resume-run <ckpt>` reads the checkpoint and decides what
-  # work to do; the supervisor only consumes the exit code.
+run_codex_phase() {
+  # Non-implement phases run as fresh `codex exec` sessions. Codex's process
+  # exit code only describes the agent session; infer the auto-step's logical
+  # result from the checkpoint it atomically updates.
   local model="$1"
-  local logfile="$2"
-  log "claude phase: ${CLAUDE_BIN} -p '/dag-executor:auto-step --resume-run ${CKPT}' --model ${model} ${CLAUDE_PERM_FLAGS} > ${logfile}"
+  local reasoning="$2"
+  local logfile="$3"
+  local phase_before status_after phase_after prompt model_args=() reasoning_args=()
+  phase_before=$(ck_get phase)
+  prompt="\$loom:auto-step --resume-run ${CKPT}"
+  if [[ -n "$model" && "$model" != "account-default" && "$model" != "default" && "$model" != "codex" ]]; then
+    model_args+=(--model "$model")
+  fi
+  if [[ -n "$reasoning" ]]; then
+    reasoning_args+=(-c "model_reasoning_effort=\"${reasoning}\"")
+  fi
+  log "codex phase: ${CODEX_BIN} exec '${prompt}' ${model_args[*]:-} reasoning=${reasoning} ${CODEX_PERM_FLAGS} > ${logfile}"
   # Same set -e discipline as run_implement_phase — caller handles wrapping.
   local rc=0
   # shellcheck disable=SC2086
-  $CLAUDE_BIN -p "/dag-executor:auto-step --resume-run ${CKPT}" --model "$model" $CLAUDE_PERM_FLAGS >"$logfile" 2>&1 || rc=$?
-  return $rc
+  $CODEX_BIN exec "$prompt" --cd "$REPO_ROOT" ${model_args[@]+"${model_args[@]}"} ${reasoning_args[@]+"${reasoning_args[@]}"} $CODEX_PERM_FLAGS >"$logfile" 2>&1 || rc=$?
+  status_after=$(ck_get status)
+  phase_after=$(ck_get phase)
+  case "$status_after" in
+    error) return 1 ;;
+    needs-decision) return 2 ;;
+    done|aborted) return 0 ;;
+  esac
+  if [[ "$phase_after" != "$phase_before" ]]; then return 0; fi
+  if (( rc != 0 )); then
+    log "codex phase process exited rc=${rc} without a checkpoint outcome"
+    return 1
+  fi
+  log "codex phase returned without advancing checkpoint phase=${phase_before} status=${status_after:-<none>}"
+  return 1
 }
 
 # --------------------------------------------------------------------------
@@ -325,8 +367,9 @@ for (( iter=1; iter<=MAX_ITER; iter++ )); do
   fp_before=$(ckpt_fingerprint)
   # Guarded: model_for_phase throws on a corrupt/truncated checkpoint, and an
   # unguarded plain assignment would errexit the whole supervisor with no
-  # structured halt (stale status:running, no /handoff).
+  # structured halt (rather than leaving stale status:running).
   model=$(model_for_phase "$phase") || handoff_and_exit "checkpoint unreadable resolving models[${phase}]"
+  reasoning=$(reasoning_for_phase "$phase") || handoff_and_exit "checkpoint unreadable resolving reasoning[${phase}]"
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   safe_phase=$(printf '%s' "$phase" | tr -c 'A-Za-z0-9._-' '_')
   logfile="${LOG_DIR}/auto-run-${ts}-iter${iter}-${safe_phase}.log"
@@ -335,13 +378,13 @@ for (( iter=1; iter<=MAX_ITER; iter++ )); do
   if [[ "$phase" == "mode-selected" ]]; then
     set +e; run_implement_phase "$model" "$logfile"; rc=$?; set -e
   else
-    set +e; run_claude_phase "$model" "$logfile"; rc=$?; set -e
+    set +e; run_codex_phase "$model" "$reasoning" "$logfile"; rc=$?; set -e
   fi
   log "phase ${phase} exited rc=${rc} log=${logfile}"
 
   case "$rc" in
     0)
-      # Claude phase bodies write their own next phase. The implement phase
+      # Codex phase bodies write their own next phase. The implement phase
       # runs the dag-executor CLI, which does NOT touch the checkpoint — so the
       # supervisor owns the implement-phase advance here (mode-selected ->
       # reviewing, retryCount reset).

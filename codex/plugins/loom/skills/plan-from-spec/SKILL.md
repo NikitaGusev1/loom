@@ -5,6 +5,8 @@ description: "Create an implementation plan from an approved spec without repeat
 
 # Plan From Spec
 
+Use `gpt-5.6-terra` with medium reasoning. The approved spec already contains the design decisions, so Sol-level reasoning is unnecessary.
+
 Turn an existing spec into an implementation plan.
 
 ## Artifact Repository

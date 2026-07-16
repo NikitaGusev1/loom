@@ -5,6 +5,8 @@ description: "Fix type errors, lint violations, and formatting issues in files t
 
 # Cleanup
 
+Model policy: use `gpt-5.6-terra` with medium reasoning for safe mechanical fixes.
+
 Clean only files touched by the current branch.
 
 ## Workflow

@@ -26,7 +26,11 @@ const within = (projectPath: string, path: string): string => {
 export class CodexDagPlanner implements DagPlanner {
   async propose(projectPath: string, item: UiInboxItem, triage: UiTriageResult): Promise<DagProposal> {
     const prompt = buildDagPlannerPrompt(item, triage);
-    const result = await runCodexCli(prompt, { model: 'account-default', cwd: projectPath });
+    const result = await runCodexCli(prompt, {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+      cwd: projectPath,
+    });
     const parsed = JSON.parse(result.trace.lastAssistantText) as DagProposal;
     const proposal = { planPath: within(projectPath, parsed.planPath), dagPath: within(projectPath, parsed.dagPath) };
     validateDAG(JSON.parse(readFileSync(proposal.dagPath, 'utf-8')));

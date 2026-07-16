@@ -5,6 +5,8 @@ description: "Execute an existing dag-executor decomposition. Use when the user 
 
 # Implement DAG
 
+Use Codex's weight-aware worker defaults: `gpt-5.6-terra` for standard/trivial tasks and `gpt-5.6-sol` for heavy tasks. An explicit `--model` overrides both.
+
 Run the `dag-executor` CLI against a decomposition file.
 
 ## Artifact Repository

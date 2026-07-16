@@ -6,7 +6,7 @@ phase: planning
 
 # Plan From Spec
 
-**MANDATORY session model: sonnet.** The spec already contains the design decisions and acceptance criteria, so planning here is extraction + structuring rather than open-ended reasoning. Running on Opus 4.8 wastes tokens with no quality gain. Switch via `/model sonnet` before invoking.
+Use `gpt-5.6-terra` with medium reasoning. The approved spec already contains the design decisions, so Sol-level reasoning is unnecessary.
 
 Create an implementation plan using an existing spec document as the foundation. The spec already contains design decisions and acceptance criteria from the `/explore` dialogue, making the planning process faster and more focused — skip re-spawning research agents and go straight to structuring the plan.
 

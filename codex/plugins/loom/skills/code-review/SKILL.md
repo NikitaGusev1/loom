@@ -5,9 +5,11 @@ description: "Conduct comprehensive code review of recent changes covering secur
 
 # Code Review
 
+Model policy: use `gpt-5.6-terra` with high reasoning for finders and verifiers; this preserves review depth while avoiding Sol across every parallel worker.
+
 A fan-out orchestrator: this skill runs entirely in-session (no single delegate agent). It gathers shared context once, dispatches five dimension-scoped finders in parallel, dispatches one adversarial verifier per CRITICAL/WARNING finding, converges everything in-session, and writes a single pre-adjudicated, contract-conformant review file — then self-validates its own output before returning.
 
-> **Agent namespacing**: `review-finder` and `review-verifier` ship in the dag-executor plugin. If a bare subagent type does not resolve, use the namespaced form (`dag-executor:review-finder`, `dag-executor:review-verifier`) — same fallback pattern as `skills/explore/SKILL.md`'s `codebase-locator` dispatch.
+Use the Codex collaboration agent mechanism directly; do not reference Claude subagent types or namespaces.
 
 The review-file frontmatter and finding-block shape are governed by `references/review-contract.md` — this skill populates every field the contract defines, including the post-triage set, in one pass (no separate triage step, no un-triaged intermediate file).
 
@@ -75,7 +77,7 @@ Fold the finder output and verifier verdicts into one pre-adjudicated finding se
 Write to the Step 3 filename with the **full post-triage field set always present** — including on a zero-finding review (uniform output; there is no separate no-op shape).
 
 **Frontmatter**, per `references/review-contract.md`:
-- Pre-adjudication: `date`, `reviewer: Claude`, `git_commit`, `branch`, `repository`, `review_type: "code-review"`, `tags`, `status: complete`, `last_updated`, `last_updated_by: Claude`, `related_plan` (omit if none), `related_research` (omit if none), `verdict`, `critical_count`, `warning_count`, `suggestion_count`, `plan_issue`, `fixable_by_ai`, `retry_recommended`.
+- Pre-adjudication: `date`, `reviewer: Codex`, `git_commit`, `branch`, `repository`, `review_type: "code-review"`, `tags`, `status: complete`, `last_updated`, `last_updated_by: Codex`, `related_plan` (omit if none), `related_research` (omit if none), `verdict`, `critical_count`, `warning_count`, `suggestion_count`, `plan_issue`, `fixable_by_ai`, `retry_recommended`.
 - Always-present post-triage set: `triaged: true`, `triaged_at`, `raw_critical_count`, `raw_warning_count`, `critical_count` (recomputed, confirmed-only), `warning_count` (recomputed, confirmed-only), `backlog_count`.
 - On a zero-finding review: `triaged: true` is still set, with `raw_critical_count: 0`, `raw_warning_count: 0`, `critical_count: 0`, `warning_count: 0`, and `backlog_count` reflecting any SUGGESTIONS-only backlog tags (0 if none).
 

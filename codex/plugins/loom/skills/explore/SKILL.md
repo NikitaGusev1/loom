@@ -5,6 +5,8 @@ description: "Explore and shape a feature or change, then automatically plan and
 
 # Explore
 
+Model policy: use `gpt-5.6-sol` with high reasoning for ambiguous product shaping; delegate bounded read-heavy research to `gpt-5.6-luna` with low reasoning when custom agents are available.
+
 Run an interactive design-and-research pass for a proposed change. Once the user approves the spec,
 continue automatically through planning and autonomous implementation.
 

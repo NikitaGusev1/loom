@@ -2,7 +2,8 @@
 name: plan-reviewer
 description: Reviews implementation plans for gaps, stale assumptions, and feasibility by cross-referencing against the actual codebase and research/spec documents. Use after /create-plan or /plan-from-spec to validate before implementation.
 tools: Read, Grep, Glob, LS
-model: claude-opus-4-8
+model: gpt-5.6-sol
+model_reasoning_effort: high
 color: yellow
 phase: planning
 ---

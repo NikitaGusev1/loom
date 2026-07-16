@@ -2,7 +2,8 @@
 name: review-verifier
 description: Adversarial skeptic that verifies exactly one CRITICAL/WARNING finding per dispatch by re-reading the cited code fresh and attempting to refute it, returning a confirmed/deferred/rejected verdict with a one-line reason and an optional severity-downgrade recommendation. Dispatched once per finding (parallel-safe).
 tools: Glob, Grep, LS, Read, Bash
-model: claude-sonnet-5
+model: gpt-5.6-terra
+model_reasoning_effort: high
 color: pink
 phase: review
 ---

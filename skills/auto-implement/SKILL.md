@@ -9,10 +9,8 @@ disable-model-invocation: true
 
 **Session model — depends on substrate (see [Execution Substrate](#execution-substrate-decide-this-first-before-phase-1) below):**
 
-- **Supervised (default)** — this chat is only a launcher + gate monitor; its context stays ≥70% free by design, so **sonnet** is sufficient. The real per-phase models come from the supervisor's map (judgment=opus, mechanical=sonnet).
-- **`--inline`** — the monolithic engine threads plan state, verdicts, and ten phases through one long context; run it on **Opus 4.8** for the larger window and sharper gate judgement.
-
-If unsure which path you'll take, `/model opus` is the safe default. Heavy judgment subagents (`plan-reviewer`, `review-finder`, `review-verifier`) pin Opus 4.8 themselves regardless.
+- **Supervised (default)** — this chat is only a launcher + gate monitor; phases use pinned Codex tiers (Sol judgment, Terra implementation, Luna routing/inspection) with the lowest suitable reasoning effort.
+- **`--inline`** — the monolithic engine threads plan state, verdicts, and ten phases through one long Codex context.
 
 You are the entry point for the implementation pipeline. **By default you launch the supervised flow** (checkpoint + background supervisor, one phase per fresh context) and then monitor it. On `--inline` you instead run the whole pipeline in this session: orchestrate `/implement-plan` (which includes a `/code-review` step) and manage the review-fix-retry loop with configurable human oversight.
 
@@ -29,7 +27,7 @@ Parse from `$ARGUMENTS`:
 - **Substrate** (optional): `--inline` forces the monolithic in-session engine (Phases 1–10 below). Default is the **supervised** flow (background supervisor, fresh context per phase) — see [Execution Substrate](#execution-substrate-decide-this-first-before-phase-1). Use `--inline` when you want one foreground context or are running a **sequential** plan (the supervisor is DAG-only).
 - **DAG mode** (optional): `--dag` forces the DAG executor for parallel implementation; `--no-dag` forces the sequential `/implement-plan` path. If neither is passed, mode is **auto-decided** by the Phase 2 thresholds based on the decomposition shape. (Mode = DAG-vs-sequential; substrate = supervised-vs-inline. A sequential mode always implies `--inline`.)
   - Unless `--no-dag` is explicit, the entry preflight ensures `decomposition_path` points to a validated project-local `.claude/ai/decomposition-*.json` before selecting mode or substrate.
-  - `--dag-model=opus|sonnet|haiku` sets the model for DAG agent worker sessions on the **inline** path (default: `sonnet`). In supervised mode the worker model comes from the auto-run models map (`mode-selected` key) — use `/auto-run --models` for fine control. Use `claude-opus-4-8` only when tasks are reasoning-heavy.
+  - `--dag-model=<codex-model>` overrides the weight-aware Codex worker defaults on the **inline** path. In supervised mode the worker model comes from the auto-run models map (`mode-selected` key).
 - **Max retries** (optional): `--max-retries N` (default: 2)
 - **Verify simulator** (optional): `--verify-simulator` passes through to `/implement-plan` to enable screenshot + devtools log checks after each phase
 
@@ -76,7 +74,7 @@ The plugin-owned agents (`plan-reviewer`, `review-finder`, `review-verifier`) an
 
 This skill has two substrates for running the pipeline:
 
-- **Supervised (DEFAULT)** — launch the headless supervisor: each phase runs in a fresh `claude -p` context with a per-phase model map, the chat session only monitors gates, and the run is checkpointed/resumable. The chat context stays ≥70% free for the whole run. **Recommended.** The supervisor is **DAG-only**.
+- **Supervised (DEFAULT)** — launch the headless supervisor: each phase runs in a fresh `codex exec` context with a per-phase model map, the chat session only monitors gates, and the run is checkpointed/resumable. Phase 3 runs `dag-executor --provider=codex` directly. The supervisor is **DAG-only**.
 - **Inline (`--inline`)** — run Phases 1–10 below **in this session**, in one long context. This is the only substrate that supports the **sequential** (`/implement-plan`) path.
 
 **Routing:**
@@ -155,7 +153,7 @@ Rationale: direct sequential bias is real on borderline jobs. Math beats vibes �
 3. Assert the preflight-validated decomposition still exists. If it does not, hard stop; do not regenerate after mode selection.
 4. Run `/implement-dag` with the decomposition path and model:
    - Pass the `<decomposition-path>` as the argument
-   - Pass `--model=<dag-model>` where `<dag-model>` is from `--dag-model` (default: `claude-opus-4-8`)
+   - Pass `--provider=codex`; add `--model=<dag-model>` only when the user supplied `--dag-model`
 5. Check the exit code:
 
    - **Exit 0** (success): All layers completed. Proceed to review.
@@ -611,10 +609,10 @@ If any step fails unexpectedly (tool error, network issue, etc.):
 /auto-implement .claude/ai/plan-2026-02-11-add-user-auth.md --dag
 ```
 
-### Inline DAG with Opus 4.8 agents (reasoning-heavy tasks):
+### Inline DAG with an explicit Codex model:
 
 ```
-/auto-implement .claude/ai/plan-2026-02-11-add-user-auth.md --inline --dag --dag-model=claude-opus-4-8
+/auto-implement .claude/ai/plan-2026-02-11-add-user-auth.md --inline --dag --dag-model=gpt-5
 ```
 
 ### Autonomous mode:

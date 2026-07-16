@@ -2,7 +2,8 @@
 name: risk-finder
 description: Read-only specialist that explores one supplied risk lens from explicit seed paths within a bounded two-hop neighborhood and returns structured candidate findings for verification.
 tools: Glob, Grep, LS, Read, Bash
-model: claude-opus-4-8
+model: gpt-5.6-terra
+model_reasoning_effort: high
 color: purple
 phase: review
 ---

@@ -2,7 +2,8 @@
 name: codebase-locator
 description: Locates WHERE code lives — files, directories, and components relevant to a feature or task. A fast grep/glob/ls layer that returns paths grouped by purpose, not file contents. Use when you need to find all files related to an area before reading or analyzing them.
 tools: Bash, Grep, Glob, LS
-model: haiku
+model: gpt-5.6-luna
+model_reasoning_effort: low
 color: green
 phase: research
 ---

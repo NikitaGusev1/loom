@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Contained end-to-end smoke run of the executor against scripts/smoke-dag.json.
 #
-# Runs real `claude -p` sessions, so it costs a little money and needs a working
-# `claude` on PATH. Fully self-contained: all mutation happens on a throwaway
+# Runs real Codex sessions, so it consumes account capacity and needs `codex`
+# on PATH. Fully self-contained: all mutation happens on a throwaway
 # branch and a gitignored scratch dir, both removed on exit (success OR failure)
 # via the cleanup trap. The branch you start on is restored untouched.
 #
-# Usage:  scripts/dag-smoke-run.sh            (model defaults to sonnet)
-#         DAG_SMOKE_MODEL=opus scripts/dag-smoke-run.sh
+# Usage:  scripts/dag-smoke-run.sh
+#         DAG_SMOKE_MODEL=<codex-model> scripts/dag-smoke-run.sh
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -16,7 +16,7 @@ ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 TMP_BRANCH="dag-smoke-run"
 SMOKE_DIR=".claude/ai/smoke"            # gitignored — events/state/lock land here
 DAG="$SMOKE_DIR/smoke-dag.json"
-MODEL="${DAG_SMOKE_MODEL:-sonnet}"
+MODEL="${DAG_SMOKE_MODEL:-account-default}"
 
 if git show-ref --verify --quiet "refs/heads/$TMP_BRANCH"; then
   echo "refusing to run: branch $TMP_BRANCH already exists — clean it up first" >&2
@@ -47,7 +47,7 @@ cp scripts/smoke-dag.json "$DAG"
 git checkout --quiet -b "$TMP_BRANCH"
 echo "=== running smoke DAG on throwaway branch $TMP_BRANCH (model=$MODEL) ==="
 set +e
-node build/index.js "$DAG" --model "$MODEL"
+node build/index.js "$DAG" --provider=codex --model "$MODEL"
 RUN_EXIT=$?
 set -e
 

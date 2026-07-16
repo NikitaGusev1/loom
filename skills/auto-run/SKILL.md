@@ -1,6 +1,6 @@
 ---
 description: Thin chat-side launcher, monitor, and gate-router for the /auto-implement supervisor loop
-argument-hint: <plan-path> [--mode human|autonomous] [--models judgment=opus,mechanical=sonnet] [--slug <run-id>]
+argument-hint: <plan-path> [--mode human|autonomous] [--models judgment=<model>,mechanical=<model>,lightweight=<model>] [--slug <run-id>]
 phase: orchestration
 disable-model-invocation: true
 ---
@@ -15,7 +15,7 @@ Thin launcher, monitor, and gate-router for the `/auto-implement` supervisor loo
 
 **Context discipline**: Before checkpoint initialization, the launcher may read plan frontmatter, invoke `/decompose --plan`, and ingest only `task_count`, `max_width`, and `has_heavy` to ensure the run is DAG-capable. After launch it holds no implementation work and never reads plan bodies, review bodies, diffs, or supervisor logs; monitoring ingests compact checkpoint fields only.
 
-**Model philosophy**: Model is chosen by reasoning need, not window size. Opus 4.8 and Sonnet both have 200k context — model determines reasoning quality. Judgment phases get Opus 4.8; mechanical phases get Sonnet. User overrides apply at launch time.
+**Provider contract**: The supervised pipeline is Codex-native. Fresh phases run through `codex exec`, DAG workers receive `--provider=codex`, and the authenticated account default is used unless the user supplies a Codex model ID.
 
 ---
 
@@ -26,8 +26,9 @@ Parse `$ARGUMENTS` to extract:
 - **Plan path** (required): the first positional argument ending in `.md`
 - **Mode**: `autonomous` if not specified; `human` only if `--mode human` or `--human` appears
 - **Forced execution mode**: explicit `dag` when `--dag` appears; otherwise unspecified. Direct `--no-dag` is unsupported because this launcher is DAG-only. For a new checkpoint, persist unspecified as `null`; for resume, an omitted flag reuses the stored value.
-- **Judgment model** (default `claude-opus-4-8`): from `--models judgment=<value>`
-- **Mechanical model** (default `claude-sonnet-4-6`): from `--models mechanical=<value>`
+- **Judgment model** (default `gpt-5.6-sol`): from `--models judgment=<value>`
+- **Mechanical model** (default `gpt-5.6-terra`): from `--models mechanical=<value>`
+- **Lightweight model** (default `gpt-5.6-luna`): from `--models lightweight=<value>`
 - **Slug**: from `--slug <value>` if present; otherwise derived from the plan filename by stripping the `plan-` prefix and `.md` suffix (e.g. `plan-2026-06-04-vmm-7218.md` → `2026-06-04-vmm-7218`)
 
 If no plan path is found in `$ARGUMENTS`, stop and ask the user to supply one.
@@ -77,30 +78,33 @@ Legacy digest backfill is a one-time migration, not permission to replace either
 
 ## Step 3 — Build Models Map
 
-Construct the `models` JSON object keyed by **phase name**. The supervisor resolves model as `models[phase] || models.default || "sonnet"`.
+Construct `models` and `reasoning` maps keyed by **phase name**. Use Sol/high only for ambiguous judgment, Terra/medium for implementation and code-changing phases, and Luna/low for deterministic routing or read-heavy inspection.
 
 Defaults by phase role:
 
 | Phase name       | Role       | Default model       |
 |------------------|------------|---------------------|
-| `validate-plan`  | judgment   | `claude-opus-4-8`   |
-| `mode-selection` | mechanical | `claude-sonnet-4-6` |
-| `mode-selected`  | implement  | `claude-sonnet-4-6` |
-| `reviewing`      | mechanical | `claude-sonnet-4-6` |
-| `figma-verified` | mechanical | `claude-sonnet-4-6` |
-| `cleaned`        | mechanical | `claude-sonnet-4-6` |
-| `simplified`     | judgment   | `claude-opus-4-8`   |
-| `evaluate-review`| judgment   | `claude-opus-4-8`   |
-| `fix-issues`     | mechanical | `claude-sonnet-4-6` |
-| `default`        | fallback   | `claude-sonnet-4-6` |
+| `validate-plan`  | judgment   | `gpt-5.6-sol`   |
+| `mode-selection` | routing    | `gpt-5.6-luna`  |
+| `mode-selected`  | implement  | `gpt-5.6-terra` |
+| `reviewing`      | inspection | `gpt-5.6-luna`  |
+| `figma-verified` | cleanup    | `gpt-5.6-terra` |
+| `cleaned`        | simplify   | `gpt-5.6-terra` |
+| `simplified`     | judgment   | `gpt-5.6-sol`   |
+| `evaluate-review`| judgment   | `gpt-5.6-sol`   |
+| `fix-issues`     | implement  | `gpt-5.6-terra` |
+| `default`        | fallback   | `gpt-5.6-terra` |
 
-The `mode-selected` key is the **dag-executor worker `--model`** for Phase 3 (Implement). The supervisor resolves `models["mode-selected"] || models.default` and passes it as `--model=` to the dag-executor CLI. It is not a `claude -p` orchestration session — it controls the worker agents that run task implementations inside worktrees.
+Reasoning defaults: `high` for `validate-plan`, `simplified`, and `evaluate-review`; `low` for `mode-selection` and `reviewing`; `medium` for every code-changing phase and fallback.
+
+The `mode-selected` key is the **dag-executor worker `--model`** for Phase 3 (Implement). The supervisor passes both `--provider=codex` and the resolved model to the executor. It is not a `codex exec` orchestration session — it controls the worker agents that run task implementations inside worktrees.
 
 Apply user overrides from `--models`:
 - `judgment=<alias>` replaces the model for all judgment-role phases (`validate-plan`, `simplified`, `evaluate-review`)
-- `mechanical=<alias>` replaces the model for all mechanical-role phases (`mode-selection`, `reviewing`, `figma-verified`, `cleaned`, `fix-issues`), the implement worker (`mode-selected`), and `default`
+- `mechanical=<alias>` replaces code-changing phases (`figma-verified`, `cleaned`, `fix-issues`), the implement worker (`mode-selected`), and `default`
+- `lightweight=<alias>` replaces deterministic/read-heavy phases (`mode-selection`, `reviewing`)
 
-Accepted aliases: `opus`, `sonnet`, `haiku`, or a full model ID (e.g. `claude-opus-4-8`). These are passed through verbatim to `claude --model`.
+Accepted values are `account-default` or a Codex model ID available to the authenticated account. `account-default` is omitted from `codex exec` so the CLI selects the account's configured model; explicit IDs are passed through to `codex exec --model` and the executor.
 
 ---
 
@@ -140,15 +144,26 @@ Initial JSON object (substitute real values before calling):
   "decision": null,
   "models": {
     "validate-plan": "<judgment-model>",
-    "mode-selection": "<mechanical-model>",
+    "mode-selection": "<lightweight-model>",
     "mode-selected": "<mechanical-model>",
-    "reviewing": "<mechanical-model>",
+    "reviewing": "<lightweight-model>",
     "figma-verified": "<mechanical-model>",
     "cleaned": "<mechanical-model>",
     "simplified": "<judgment-model>",
     "evaluate-review": "<judgment-model>",
     "fix-issues": "<mechanical-model>",
     "default": "<mechanical-model>"
+  },
+  "reasoning": {
+    "validate-plan": "high",
+    "mode-selection": "low",
+    "reviewing": "low",
+    "figma-verified": "medium",
+    "cleaned": "medium",
+    "simplified": "high",
+    "evaluate-review": "high",
+    "fix-issues": "medium",
+    "default": "medium"
   }
 }
 ```
@@ -166,7 +181,7 @@ Run ID:     <runId>
 Plan:       <planPath>
 Mode:       <mode>
 Checkpoint: <CKPT_PATH>
-Models:     judgment=<alias>, mechanical=<alias>
+Models:     judgment=<alias>, mechanical=<alias>, lightweight=<alias>
 ```
 
 ---
@@ -176,11 +191,13 @@ Models:     judgment=<alias>, mechanical=<alias>
 Launch the supervisor detached so it survives across chat turns while the chat
 session only monitors.
 
-**In Claude Code (the normal case): launch via the Bash tool's background
-execution — set `run_in_background: true` on the Bash call.** The command is just:
+Launch via the host tool's durable background execution. On macOS, keep the
+machine awake for the lifetime of the supervisor:
 
 ```bash
-bash "$SUPERVISOR" "$CKPT_PATH" > "$LOGFILE" 2>&1
+bash "$SUPERVISOR" "$CKPT_PATH" > "$LOGFILE" 2>&1 & supervisor_pid=$!
+if command -v caffeinate >/dev/null 2>&1; then exec caffeinate -im -w "$supervisor_pid"; fi
+wait "$supervisor_pid"
 ```
 
 **Do NOT use `nohup … & disown`.** A bare-`&` background job spawned inside a
@@ -191,7 +208,7 @@ phase (observed: process gone, checkpoint frozen on `validate-plan`).
 detached, persists across turns, and the harness re-notifies the chat when it
 exits. The harness returns a background task ID; do not block on it.
 
-(In a raw terminal *outside* Claude Code, the equivalent durable launch is
+(In a raw terminal, the equivalent durable launch is
 `nohup bash "$SUPERVISOR" "$CKPT_PATH" > "$LOGFILE" 2>&1 & disown`.)
 
 After launch, print:
@@ -283,7 +300,7 @@ Gate name → prompt:
 | `plan-needs-revision`  | Plan reviewer found gaps. Review findings in the supervisor log, then confirm proceed or abort. |
 | `warnings-gate`        | Review passed with warnings. Proceed to done (warnings noted), or trigger a fix cycle. |
 | `fix-approval`         | Human mode: approve the fix cycle for a REJECTED review. Proceed to fix or abort. |
-| `supervisor-halt`      | Supervisor triggered /handoff. Check logfile for halt reason. Decide abort or (if recoverable) continue. |
+| `supervisor-halt`      | Supervisor recorded a structured halt. Check `haltReason` and the logfile, then decide abort or (if repaired) continue. |
 | `phase-error-<phase>`  | Phase `<phase>` reported a hard error (exit 1) and the supervisor halted. Inspect the logfile for the failure, then abort or (if repaired) continue. |
 | `phase-pause-<phase>`  | Phase `<phase>` paused unexpectedly. Check logfile. Decide continue or abort. |
 | `sequential-not-supported` | Defensive legacy/corrupt-checkpoint guard: supervised Phase 2 resolved sequential even though the launcher only starts measured DAG runs. Abort and restart through `/auto-implement <plan> --inline`; do not manufacture a DAG merely to clear the gate. |
@@ -371,7 +388,7 @@ Run halted: <runId>
 Checkpoint: <CKPT_PATH>
 Supervisor log: <LOGFILE>
 
-The supervisor invoked /handoff. Inspect the log for the halt reason.
+Inspect checkpoint `haltReason` and the log for the failure details.
 To dump checkpoint: dag-checkpoint dump <CKPT_PATH>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
@@ -406,7 +423,7 @@ To dump checkpoint: dag-checkpoint dump <CKPT_PATH>
 ### Override models at launch:
 
 ```
-/auto-run .claude/ai/plan-2026-06-04-vmm-7218.md --models judgment=claude-opus-4-8,mechanical=claude-sonnet-4-6
+/auto-run .claude/ai/plan-2026-06-04-vmm-7218.md --models judgment=gpt-5.6-sol,mechanical=gpt-5.6-terra
 ```
 
 ### Autonomous + custom slug:
@@ -415,8 +432,8 @@ To dump checkpoint: dag-checkpoint dump <CKPT_PATH>
 /auto-run .claude/ai/plan-2026-06-04-vmm-7218.md --mode autonomous --slug vmm-7218-run2
 ```
 
-### Lightweight run (all phases on sonnet):
+### Use the authenticated account default for every phase:
 
 ```
-/auto-run .claude/ai/plan-2026-06-04-vmm-7218.md --models judgment=claude-sonnet-4-6,mechanical=claude-sonnet-4-6
+/auto-run .claude/ai/plan-2026-06-04-vmm-7218.md --models judgment=account-default,mechanical=account-default
 ```

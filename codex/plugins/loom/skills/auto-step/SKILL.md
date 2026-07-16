@@ -5,9 +5,11 @@ description: "Execute or inspect one phase of the auto-implement supervisor loop
 
 # Auto Step
 
-Headless single-phase runner for the `/auto-implement` supervisor loop. **One invocation executes exactly one pipeline phase**, then exits. The loop lives in the supervisor — never here. This is the refresh boundary: each phase gets a clean `claude -p` context.
+Headless single-phase runner for the `/auto-implement` supervisor loop. **One invocation executes exactly one pipeline phase**, then exits. The loop lives in the supervisor — never here. This is the refresh boundary: each phase gets a clean `codex exec` context.
 
-**Session model: set by the supervisor, not by this skill.** Each phase is launched as a one-shot `claude -p … --model <m>`, where `<m>` comes from the supervisor's **per-phase model map** (`models[phase] || models.default`, seeded by `/auto-run`: judgment phases → Opus 4.8, mechanical/routing phases → sonnet). A `-p` run can't `/model`-switch mid-session, so there is no in-session mandate to honor — the map is authoritative. (For a rare manual interactive `/auto-step` run, prefer Opus 4.8: the judgment phases want it.) Judgment phases (1, 7, 8) also spawn subagents internally pinned to Opus 4.8 regardless of the session model.
+**Session model: set by the supervisor, not by this skill.** The phase map pins `gpt-5.6-sol`/high for judgment, `gpt-5.6-terra`/medium for code-changing work, and `gpt-5.6-luna`/low for routing or inspection.
+
+**Outcome contract:** `codex exec` may exit 0 even when the phase reports a logical hard stop. Every phase must write its outcome to the checkpoint; the supervisor infers success, pause, or failure from checkpoint status and phase.
 
 ## Artifact Repository
 
@@ -102,10 +104,11 @@ These are terminal or park states that the supervisor handles directly; `/auto-s
 
 **`/auto-step` is never invoked when `checkpoint.phase == mode-selected`.**
 
-When Phase 2 writes `phase: mode-selected` and exits 0, the supervisor reads the checkpoint directly, then runs the dag-executor CLI instead of spawning a claude session:
+When Phase 2 writes `phase: mode-selected`, the supervisor runs the dag-executor CLI directly instead of spawning a Codex orchestration session:
 
 ```bash
 dag-executor <dagPath> \
+  --provider=codex \
   --model=<resolved: checkpoint.models["mode-selected"] || checkpoint.models.default> \
   > <logfile> 2>&1
 ```
@@ -198,7 +201,6 @@ This skill is intended to be invoked by a supervisor process, not by a human dir
 1. Read `checkpoint.phase` after init (or after previous phase exit).
 2. If `phase == mode-selected`: run dag-executor CLI per `${CLAUDE_PLUGIN_ROOT}/references/auto-step-phase-implement.md`; write checkpoint; re-read phase.
 3. If `phase` is terminal (`done`, `aborted`) or parked (`needs-decision`): stop / wait.
-4. Otherwise: `claude -p /auto-step --resume-run <ckpt> --model <phase-model>`
-   - Model selection from `checkpoint.models`, keyed by **phase name** with a `default` fallback (`models[phase] || models.default`): judgment-role phase names (`validate-plan`, `simplified`, `evaluate-review`) default to Opus 4.8; mechanical-role phase names (`mode-selection`, `reviewing`, `figma-verified`, `cleaned`, `fix-issues`) default to sonnet.
-5. Read exit code only. Branch per the exit code contract above.
+4. Otherwise: `codex exec '$loom:auto-step --resume-run <ckpt>'` with the phase's pinned model and reasoning effort.
+5. Read the updated checkpoint. Treat `status:error` as hard stop, `status:needs-decision` as pause, and an advanced phase or terminal status as success. No checkpoint outcome is a hard stop.
 6. On exit 2: wait for chat session to write `decision`, then go to step 4 for the same phase.

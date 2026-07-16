@@ -410,7 +410,7 @@ Local intake state is stored under:
 
 Only one sequential runner mutates a project at a time. Automatic execution requires a git repository with no project changes other than UI-owned `.dag-executor/` artifacts. A crashed run that leaves project changes requires inspection and is never automatically relaunched. Disable `Auto-run easy work` in the UI to keep triage enabled while requiring approval for every execution.
 
-Sequential intake currently uses the account-default Codex CLI and requires the Loom plugin to be installed. DAG proposals use the existing `loom-supervisor` queue.
+Sequential intake uses `gpt-5.6-terra` with medium reasoning and requires the Loom plugin to be installed. Triage uses `gpt-5.6-luna`/low, while DAG planning reserves `gpt-5.6-sol`/high for dependency design. DAG proposals use the existing `loom-supervisor` queue.
 
 ```
 dag-executor <decomposition.json> [flags]
@@ -432,7 +432,7 @@ dag-executor <decomposition.json> [flags]
 | `--diff-view <dag>`              | —                         | Render a self-contained HTML diff view for a completed DAG run                                   |
 | `--no-open`                      | false                     | With `--diff-view`, write the HTML path without opening a browser                                |
 | `--provider=codex\|claude`       | codex                     | Choose provider backend                                                                          |
-| `--model=opus\|sonnet\|haiku`    | sonnet                    | Model for standard/trivial tasks; `opus` is used for heavy tasks by default                      |
+| `--model=<model>`                 | weight-aware              | Codex defaults to Terra for standard/trivial and Sol for heavy; an explicit model overrides both |
 | `--rerun=id1,id2`                | —                         | Re-execute specific tasks (emits `task.reset` before re-running)                                 |
 | `--force-worktree-reset=id1,id2` | —                         | Allow clobbering unmerged branches for the listed task IDs                                       |
 | `--test-cmd=<cmd>`               | detected                  | Override the verification test command (else auto-detected from `package.json`)                  |
@@ -557,7 +557,11 @@ LOOM_SUPERVISOR_LOG_DIR=/path/to/logs
 LOOM_SUPERVISOR_DETACH_LOG=/path/to/supervisor.log
 ```
 
-### Model aliases
+### Provider models
+
+Codex is the default provider. Omit `--model` to use the token-efficient weight-aware policy: `gpt-5.6-terra` for standard/trivial workers and `gpt-5.6-sol` for heavy workers. Pass `--model=account-default` to deliberately use the authenticated account configuration for every weight, or pass an explicit Codex model ID to override both worker tiers.
+
+When `--provider=claude` is explicitly selected, the legacy aliases remain available:
 
 | Alias    | Resolved model              |
 | -------- | --------------------------- |
@@ -565,7 +569,7 @@ LOOM_SUPERVISOR_DETACH_LOG=/path/to/supervisor.log
 | `sonnet` | `claude-sonnet-4-6`         |
 | `haiku`  | `claude-haiku-4-5-20251001` |
 
-Passing a full model ID directly (e.g. `--model=claude-opus-4-8`) is also accepted.
+Full model IDs supported by the selected provider are also accepted.
 
 ---
 

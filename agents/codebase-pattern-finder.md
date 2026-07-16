@@ -2,7 +2,8 @@
 name: codebase-pattern-finder
 description: Finds existing implementations, usage examples, and patterns to model new work after. Like codebase-locator, but returns concrete code snippets with file:line references rather than just file locations. Use when you need a template or precedent for something you are about to build.
 tools: Bash, Grep, Glob, Read, LS
-model: haiku
+model: gpt-5.6-luna
+model_reasoning_effort: low
 color: purple
 phase: research
 ---

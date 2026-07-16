@@ -68,7 +68,7 @@ describe('SequentialRunner', () => {
       planPath: 'plan',
       logPath: 'log',
       provider: 'codex' as const,
-      model: 'account-default',
+      model: 'gpt-5.6-terra',
       pid: null,
       baseCommit: null,
       terminalCommit: null,

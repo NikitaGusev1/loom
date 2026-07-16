@@ -3,7 +3,8 @@ name: web-search-researcher
 description: Researches a question against current web sources — official documentation, changelogs, technical blogs, and Q&A sites. Use when you need modern or external information beyond the codebase or model knowledge (library APIs, version-specific behavior, best practices). Returns synthesized findings with direct quotes and source links.
 tools: WebSearch, WebFetch, TodoWrite, Read, Grep, Glob, LS
 color: yellow
-model: haiku
+model: gpt-5.6-luna
+model_reasoning_effort: low
 phase: research
 ---
 

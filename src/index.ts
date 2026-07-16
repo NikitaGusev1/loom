@@ -33,7 +33,8 @@ const MODEL_MAP: Record<string, string> = {
   haiku: 'claude-haiku-4-5-20251001',
 };
 
-const CODEX_DEFAULT_MODEL = 'account-default';
+const CODEX_DEFAULT_MODEL = 'gpt-5.6-terra';
+const CODEX_HEAVY_MODEL = 'gpt-5.6-sol';
 const CODEX_MODEL_MAP: Record<string, string> = {
   codex: CODEX_DEFAULT_MODEL,
   default: CODEX_DEFAULT_MODEL,
@@ -273,7 +274,7 @@ const resolveModels = (
 ): { defaultModel: string; heavyModel: string } => {
   if (!arg) {
     return selectedProvider === 'codex'
-      ? { defaultModel: CODEX_DEFAULT_MODEL, heavyModel: CODEX_DEFAULT_MODEL }
+      ? { defaultModel: CODEX_DEFAULT_MODEL, heavyModel: CODEX_HEAVY_MODEL }
       : { defaultModel: 'claude-sonnet-4-6', heavyModel: 'claude-opus-4-8' };
   }
   const map = selectedProvider === 'codex' ? CODEX_MODEL_MAP : MODEL_MAP;

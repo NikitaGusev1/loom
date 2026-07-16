@@ -33,6 +33,8 @@ The checkpoint is the lightweight, single-JSON-snapshot analogue of the dag-exec
 | `pendingGate`  | string \| null                    | supervisor + phases | Name of the gate awaiting a human decision; `null` when not gated. `sequential-not-supported` is a defensive legacy/corrupt-checkpoint guard; the direct launcher refuses measured sequential runs before checkpoint init. |
 | `decision`     | string \| null                    | **chat only** | The human's verdict for the pending gate.                                |
 | `models`       | object                            | /auto-run init | Model assignment per phase name (with a `default` fallback).             |
+| `reasoning`    | object                            | /auto-run init | Codex reasoning effort per phase (`low`, `medium`, `high`, etc.) with a `default` fallback. |
+| `haltReason`   | string                            | supervisor    | Structured terminal failure reason when `status=error`.                  |
 | `lastUpdated`  | ISO-8601 string                   | helper        | Stamped on every merge write by the helper.                              |
 
 ### `status` enum
@@ -51,9 +53,9 @@ The two writers MUST NOT contend on the same field:
 
 | Writer        | May write                                                                            | May NOT write                              |
 | ------------- | ------------------------------------------------------------------------------------ | ------------------------------------------ |
-| **/auto-run init/migration** | `runId`, `planPath`, `planDigest`, `decompositionDigest`, `forceMode`, `phase` (initial), `runMode`, `mode` (initial `null`), `status` (initial `running`), `retryCount` (initial `0`), `pendingGate`/`decision` (initial `null`), `models`; migration may atomically backfill both digest fields only when both are absent and canonical binding/validation passes | — (init-time only; digest migration is write-once) |
+| **/auto-run init/migration** | `runId`, `planPath`, `planDigest`, `decompositionDigest`, `forceMode`, `phase` (initial), `runMode`, `mode` (initial `null`), `status` (initial `running`), `retryCount` (initial `0`), `pendingGate`/`decision` (initial `null`), `models`, `reasoning`; migration may atomically backfill both digest fields only when both are absent and canonical binding/validation passes | — (init-time only; digest migration is write-once) |
 | **chat session** | `decision`, and the `status` flip `needs-decision` -> `running` after a decision  | everything else (including immutable `runMode`, `forceMode`, `planDigest`, and `decompositionDigest`) |
-| **supervisor / headless phases** | `runId`, `planPath`, `dagPath`, `reviewPath`, `phase`, `retryCount`, `mode`, `status`, `pendingGate`, `models` | `runMode`, `forceMode`, `planDigest`, and `decompositionDigest` (immutable after init); `decision` (chat owns it) — **except** the consuming phase MAY reset `decision` to `null` (and ONLY to `null`) immediately after reading it on the resume path; it may never set `decision` to a non-null value |
+| **supervisor / headless phases** | `runId`, `planPath`, `dagPath`, `reviewPath`, `phase`, `retryCount`, `mode`, `status`, `pendingGate`, `models`, `reasoning`, `haltReason` | `runMode`, `forceMode`, `planDigest`, and `decompositionDigest` (immutable after init); `decision` (chat owns it) — **except** the consuming phase MAY reset `decision` to `null` (and ONLY to `null`) immediately after reading it on the resume path; it may never set `decision` to a non-null value |
 
 `runMode` (gate dimension: `human`/`autonomous`) is written ONCE by `/auto-run` at init and is never overwritten by any writer. It is distinct from `mode` (execution dimension: `sequential`/`dag`), which is `null` at init and set ONCE by Phase 2. Keeping these two orthogonal dimensions in separate fields is what prevents Phase 2's `mode` write from clobbering the gate-routing flag.
 

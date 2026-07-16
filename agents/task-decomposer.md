@@ -2,7 +2,8 @@
 name: task-decomposer
 description: Decomposes large tasks into structured dependency graphs of agent-sized subtasks. Takes a context bundle and produces a JSON DAG with contracts, dependencies, and completion criteria. Also handles self-critique refinement.
 tools: Read, Grep, Glob, LS
-model: claude-opus-4-8
+model: gpt-5.6-sol
+model_reasoning_effort: high
 color: orange
 phase: planning
 ---

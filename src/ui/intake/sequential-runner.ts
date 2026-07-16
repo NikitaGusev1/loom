@@ -44,7 +44,8 @@ export class CodexSequentialProvider implements SequentialProvider {
   }): Promise<void> {
     const prompt = `Use the loom:auto-implement skill to execute this approved plan sequentially: ${options.planPath}. Force --no-dag --inline --mode autonomous. Complete implementation, verification, and review.`;
     await runCodexCli(prompt, {
-      model: 'account-default',
+      model: 'gpt-5.6-terra',
+      reasoningEffort: 'medium',
       cwd: options.projectPath,
       signal: options.signal,
       onOutput: options.onOutput,
@@ -101,7 +102,7 @@ export class SequentialRunner {
       planPath,
       logPath: getRunLogPath(this.projectPath, runId),
       provider: 'codex',
-      model: 'account-default',
+      model: 'gpt-5.6-terra',
       pid: null,
       baseCommit: git(this.projectPath, ['rev-parse', 'HEAD']),
       terminalCommit: null,

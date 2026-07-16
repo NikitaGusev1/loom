@@ -2,7 +2,8 @@
 name: codebase-analyzer
 description: Analyzes HOW code works — traces data flow and implementation details with precise file:line references. Use when you need to understand the mechanics of a specific component, system, or code path. Returns a documentarian-style analysis, not a critique. The more specific the request, the better the result.
 tools: Bash, Read, Grep, Glob, LS
-model: opus
+model: gpt-5.6-terra
+model_reasoning_effort: medium
 color: blue
 phase: research
 ---

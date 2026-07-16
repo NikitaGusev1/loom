@@ -1,12 +1,12 @@
 ---
-description: Executes a decomposition DAG using the dag-executor CLI (external Visma-Manager/dag-executor repo, linked via npm link). Spawns parallel Claude Code sessions in isolated git worktrees via the Agent SDK. Use when user says "run the dag", "execute dag", or provides a decomposition JSON path.
+description: Executes a decomposition DAG using the dag-executor CLI. Spawns parallel Codex sessions in isolated git worktrees by default, with Claude retained as an explicit optional provider. Use when user says "run the dag", "execute dag", or provides a decomposition JSON path.
 phase: implementation
 disable-model-invocation: true
 ---
 
 # Implement DAG
 
-Execute a decomposition DAG with real process-level parallelism. Each task runs in its own git worktree as a separate Claude Code session via the Agent SDK.
+Execute a decomposition DAG with real process-level parallelism. Each task runs in its own git worktree as a separate provider session; Codex is the default.
 
 This skill is a wrapper around the `dag-executor` binary (lives in the external [Visma-Manager/dag-executor](https://github.com/Visma-Manager/dag-executor) repo, exposed on PATH via `npm link`).
 
@@ -34,7 +34,8 @@ Parse from `$ARGUMENTS`:
 
 - **DAG path** (required): Path to a `.claude/ai/decomposition-*.json` file
 - **`--dry-run`** (optional): Validate the DAG and show execution plan without spawning sessions
-- **`--model=opus|sonnet|<full-id>`** (optional): Model for agent sessions (default: `claude-opus-4-8`). Aliases resolve via the CLI; pass a full id (e.g. `claude-opus-4-8`) to pin a version.
+- **`--provider=codex|claude`** (optional): Provider backend (default: `codex`).
+- **`--model=<id>`** (optional): explicit model supported by the selected provider (default for Codex: `gpt-5.6-terra`; heavy workers use `gpt-5.6-sol` when no override is supplied).
 - **`--resume`** (optional): Resume from a previous interrupted execution
 - **`--rerun=id1,id2`** (optional): Re-execute specific tasks from a previous run. Resets those tasks to pending and starts from the earliest affected layer. Other completed tasks in the same layer are skipped. Requires an existing state file.
 
@@ -51,7 +52,7 @@ Review the output to confirm layers, tasks, dependencies, and file scopes look c
 ### Execute
 
 ```bash
-dag-executor <dag.json> --model=sonnet
+dag-executor <dag.json> --provider=codex
 ```
 
 The executor will:
@@ -60,7 +61,7 @@ The executor will:
 2. Warn if the working tree has uncommitted changes
 3. For each execution layer:
    - Create git worktrees (one per task, branched from current branch)
-   - Spawn parallel Claude Code sessions via the Agent SDK
+   - Spawn parallel Codex sessions through `codex exec`
    - Auto-commit any uncommitted agent work in each worktree
    - Sequentially merge worktree branches back into the working branch
    - Verify contracts between layers (hard gate — pauses if outputs are missing)
@@ -89,7 +90,7 @@ Without `--resume`, an existing state file is discarded and execution starts fre
 ```
 Decomposition JSON → Validate → For each layer:
   1. Create git worktrees (one per task)
-  2. Spawn parallel Claude Code sessions (Agent SDK query())
+  2. Spawn parallel provider sessions (Codex by default)
   3. Auto-commit agent work in each worktree
   4. Sequentially merge worktree branches back
   5. Verify contracts between layers
@@ -110,7 +111,7 @@ Use `/decompose` to create a decomposition DAG from a Jira ticket or task descri
 ## Tips
 
 - **`dag-executor --slots`** — on-demand peek at live cross-window session status (slot holders + parked waiters); reads the shared slot dir, takes no DAG arg, exits 0
-- **Use `--model=sonnet` for cost-sensitive runs** — each parallel task is a separate session
+- **Prefer the weight-aware defaults** (`gpt-5.6-terra` standard, `gpt-5.6-sol` heavy) unless the user explicitly selects another Codex model
 - **Commit before running** — the executor merges worktree branches into your current branch; uncommitted changes may cause merge conflicts
 - **Check `git log` after execution** — you'll see merge commits from each worktree branch
 - **Worktrees are cleaned up automatically** — if something goes wrong, check `git worktree list` and clean up manually with `git worktree remove`
