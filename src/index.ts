@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ZodError } from 'zod';
 import { validateDAG } from './validation.js';
 import { executeDAG } from './executor.js';
@@ -22,6 +23,7 @@ import { checkSelfHostStaleness } from './self-host-guard.js';
 import { analyzeDAGReadiness, formatDAGReadinessReport } from './dag-readiness.js';
 import { archiveRun } from './corpus.js';
 import { createUiServer } from './ui/server.js';
+import { registerProject, resolveArtifactsRoot } from './ui/projects.js';
 
 const log = createLogger();
 
@@ -197,14 +199,31 @@ if (readinessFlag) {
 }
 
 if (uiFlag) {
-  const projectPath = resolve(projectArg ?? dagPath ?? process.cwd());
   const port = portArg === undefined ? 0 : Number(portArg);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     log.error(`Invalid --port=${portArg}. Expected an integer from 0 to 65535.`);
     process.exit(1);
   }
 
-  const server = createUiServer({ projectPath });
+  const artifactsRoot = resolveArtifactsRoot();
+  const explicitProjectPath = projectArg ?? dagPath;
+  let initialProject;
+  try {
+    const resolvedProject = explicitProjectPath ? resolve(explicitProjectPath) : undefined;
+    const selfProjectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+    const loomProject = existsSync(join(selfProjectRoot, '.git'))
+      ? registerProject(artifactsRoot, selfProjectRoot, { displayName: 'Loom' })
+      : undefined;
+    initialProject = resolvedProject
+      ? resolvedProject === selfProjectRoot
+        ? (loomProject ?? registerProject(artifactsRoot, selfProjectRoot, { displayName: 'Loom' }))
+        : registerProject(artifactsRoot, resolvedProject)
+      : undefined;
+  } catch (err) {
+    log.error(`Failed to register UI project: ${toErrorMessage(err)}`);
+    process.exit(1);
+  }
+  const server = createUiServer({ artifactsRoot, initialProject });
   server.listen(port, '127.0.0.1', () => {
     const address = server.address();
     if (!address || typeof address === 'string') {

@@ -98,5 +98,7 @@ describe('intake persistence', () => {
       recoveryRequired: false,
     };
     writeCheckpoint(projectDir, checkpoint);
+    assert.throws(() => writeCheckpoint(projectDir, { ...checkpoint, id: '../../outside' }));
+    assert.throws(() => readRunLogTail(projectDir, '../../../../outside'), /escapes project/);
   });
 });

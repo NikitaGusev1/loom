@@ -1,19 +1,22 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { Server } from 'node:http';
+import { basename, join } from 'node:path';
+import { request, type Server } from 'node:http';
 import { createUiServer } from './server.js';
+import { registerProject } from './projects.js';
 
 let projectDir: string;
 let slotDir: string;
+let artifactsDir: string;
 let dagPath: string;
 
 beforeEach(() => {
   projectDir = mkdtempSync(join(tmpdir(), 'dag-ui-server-'));
   slotDir = mkdtempSync(join(tmpdir(), 'dag-ui-server-slots-'));
+  artifactsDir = mkdtempSync(join(tmpdir(), 'dag-ui-server-artifacts-'));
   dagPath = join(projectDir, 'work.json');
   writeFileSync(dagPath, JSON.stringify(dagJson()));
 });
@@ -21,6 +24,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(projectDir, { recursive: true, force: true });
   rmSync(slotDir, { recursive: true, force: true });
+  rmSync(artifactsDir, { recursive: true, force: true });
 });
 
 const dagJson = () => ({
@@ -85,7 +89,13 @@ const withServer = async <T>(
     cancel: overrides.cancel ?? (async () => {}),
     stop: () => {},
   };
-  const server = createUiServer({ projectPath: projectDir, slotDir, maxSlots: 2, intakeService });
+  const server = createUiServer({
+    projectPath: projectDir,
+    artifactsRoot: artifactsDir,
+    slotDir,
+    maxSlots: 2,
+    intakeService,
+  });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   assert(address && typeof address === 'object');
@@ -101,8 +111,26 @@ const closeServer = (server: Server): Promise<void> =>
     server.close((err) => (err ? reject(err) : resolve()));
   });
 
+const requestStatus = (baseUrl: string, headers: Record<string, string>): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const url = new URL('/api/session', baseUrl);
+    const req = request({ hostname: url.hostname, port: url.port, path: url.pathname, headers }, (response) => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode ?? 0));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+
 const fetchJson = async (baseUrl: string, path: string, init?: RequestInit) => {
-  const response = await fetch(`${baseUrl}${path}`, init);
+  const method = init?.method ?? 'GET';
+  const headers = new Headers(init?.headers);
+  if (method !== 'GET' && method !== 'HEAD') {
+    const session = await fetch(`${baseUrl}/api/session`);
+    const body = await session.json();
+    headers.set('x-loom-csrf', body.csrfToken);
+  }
+  const response = await fetch(`${baseUrl}${path}`, { ...init, headers });
   assert.match(response.headers.get('content-type') ?? '', /^application\/json; charset=utf-8$/);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   return { response, json: await response.json() };
@@ -129,6 +157,34 @@ describe('createUiServer', () => {
     });
   });
 
+  it('issues a session token and rejects mutations without it', async () => {
+    await withServer(async (baseUrl) => {
+      const session = await fetch(`${baseUrl}/api/session`);
+      const body = await session.json();
+      const rejected = await fetch(`${baseUrl}/api/inbox`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ body: 'Must be rejected' }),
+      });
+
+      assert.equal(typeof body.csrfToken, 'string');
+      assert.ok(body.csrfToken.length > 0);
+      assert.equal(rejected.status, 403);
+    });
+  });
+
+  it('rejects cross-origin and invalid Host requests', async () => {
+    await withServer(async (baseUrl) => {
+      const crossOrigin = await fetch(`${baseUrl}/api/session`, { headers: { origin: 'https://example.com' } });
+      const malformedOrigin = await fetch(`${baseUrl}/api/session`, { headers: { origin: 'not-a-url' } });
+      const invalidHostStatus = await requestStatus(baseUrl, { host: 'example.com' });
+
+      assert.equal(crossOrigin.status, 403);
+      assert.equal(malformedOrigin.status, 403);
+      assert.equal(invalidHostStatus, 403);
+    });
+  });
+
   it('GET /api/dags returns discovered DAG list', async () => {
     await withServer(async (baseUrl) => {
       const { response, json } = await fetchJson(baseUrl, '/api/dags');
@@ -142,9 +198,136 @@ describe('createUiServer', () => {
     });
   });
 
+  it('lists projects and serves slug-scoped summaries', async () => {
+    await withServer(async (baseUrl) => {
+      const listed = await fetchJson(baseUrl, '/api/projects');
+      const slug = basename(projectDir);
+      const summary = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(slug)}`);
+
+      assert.equal(listed.json.projects.length, 1);
+      assert.equal(listed.json.projects[0].slug, slug);
+      assert.equal(summary.json.displayName, slug);
+      assert.deepEqual(summary.json.dagCounts, { active: 1, history: 0, archived: 0, attention: 0 });
+    });
+  });
+
+  it('bounds project intake services and stops the idle LRU service on eviction', async () => {
+    const secondProject = mkdtempSync(join(tmpdir(), 'dag-ui-server-second-'));
+    const first = registerProject(artifactsDir, projectDir);
+    const second = registerProject(artifactsDir, secondProject);
+    const stopped: string[] = [];
+    const server = createUiServer({
+      artifactsRoot: artifactsDir,
+      maxIntakeServices: 1,
+      isIntakeActive: () => false,
+      intakeServiceFactory: (projectPath) => ({
+        enqueueTriage: () => {},
+        updatePolicy: (policy) => policy,
+        clarify: () => {},
+        approve: async () => {},
+        cancel: async () => {},
+        stop: () => stopped.push(projectPath),
+      }),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    try {
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(first.slug)}/intake/reconcile`, { method: 'POST' });
+      await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(second.slug)}/intake/reconcile`, { method: 'POST' });
+      assert.deepEqual(stopped, [first.repoPath]);
+    } finally {
+      await closeServer(server);
+      rmSync(secondProject, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 503 instead of evicting a busy intake service', async () => {
+    const secondProject = mkdtempSync(join(tmpdir(), 'dag-ui-server-busy-'));
+    const first = registerProject(artifactsDir, projectDir);
+    const second = registerProject(artifactsDir, secondProject);
+    const stopped: string[] = [];
+    const server = createUiServer({
+      artifactsRoot: artifactsDir,
+      maxIntakeServices: 1,
+      isIntakeActive: () => true,
+      intakeServiceFactory: (projectPath) => ({
+        enqueueTriage: () => {},
+        updatePolicy: (policy) => policy,
+        clarify: () => {},
+        approve: async () => {},
+        cancel: async () => {},
+        stop: () => stopped.push(projectPath),
+      }),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    try {
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(first.slug)}/intake/reconcile`, { method: 'POST' });
+      const response = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(second.slug)}/intake/reconcile`, {
+        method: 'POST',
+      });
+      assert.equal(response.response.status, 503);
+      assert.deepEqual(stopped, []);
+    } finally {
+      await closeServer(server);
+      rmSync(secondProject, { recursive: true, force: true });
+    }
+  });
+
+  it('archives and restores completed DAGs without changing source bytes', async () => {
+    writeFileSync(
+      join(projectDir, 'work.state.json'),
+      JSON.stringify({
+        status: 'completed',
+        tasks: { 'task-a': { status: 'completed' }, 'task-b': { status: 'completed' } },
+      }),
+    );
+    const before = readFileSync(dagPath, 'utf-8');
+    await withServer(async (baseUrl) => {
+      const slug = encodeURIComponent(basename(projectDir));
+      const archived = await fetchJson(baseUrl, `/api/projects/${slug}/dags/archive`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'work.json' }),
+      });
+      const archivedList = await fetchJson(baseUrl, `/api/projects/${slug}/dags?view=archived`);
+      const restored = await fetchJson(baseUrl, `/api/projects/${slug}/dags/restore`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'work.json' }),
+      });
+
+      assert.equal(archived.response.status, 200);
+      assert.equal(archivedList.json.dags[0].relativePath, 'work.json');
+      assert.equal(restored.response.status, 200);
+      assert.equal(readFileSync(dagPath, 'utf-8'), before);
+    });
+  });
+
+  it('rejects traversal and archiving incomplete DAGs', async () => {
+    await withServer(async (baseUrl) => {
+      const slug = encodeURIComponent(basename(projectDir));
+      const traversal = await fetchJson(
+        baseUrl,
+        `/api/projects/${slug}/dags/detail?path=${encodeURIComponent('../work.json')}`,
+      );
+      const incomplete = await fetchJson(baseUrl, `/api/projects/${slug}/dags/archive`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'work.json' }),
+      });
+      assert.equal(traversal.response.status, 400);
+      assert.equal(incomplete.response.status, 409);
+    });
+  });
+
   it('GET /api/dags/detail?path=... returns DAG detail', async () => {
     await withServer(async (baseUrl) => {
-      const { response, json } = await fetchJson(baseUrl, `/api/dags/detail?path=${encodeURIComponent(dagPath)}`);
+      const { response, json } = await fetchJson(baseUrl, '/api/dags/detail?path=work.json');
 
       assert.equal(response.status, 200);
       assert.equal(json.dagPath, dagPath);
@@ -155,10 +338,7 @@ describe('createUiServer', () => {
 
   it('GET /api/tasks/detail?dagPath=...&taskId=... returns task detail', async () => {
     await withServer(async (baseUrl) => {
-      const { response, json } = await fetchJson(
-        baseUrl,
-        `/api/tasks/detail?dagPath=${encodeURIComponent(dagPath)}&taskId=task-b`,
-      );
+      const { response, json } = await fetchJson(baseUrl, '/api/tasks/detail?dagPath=work.json&taskId=task-b');
 
       assert.equal(response.status, 200);
       assert.equal(json.task.id, 'task-b');
@@ -271,29 +451,35 @@ describe('createUiServer', () => {
 
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type') ?? '', /^text\/html/);
-      assert.match(html, /DAG Executor/);
-      assert.match(html, /Local agent intake/);
+      assert.match(html, /<title>Loom<\/title>/);
+      assert.match(html, /All projects/);
       assert.match(html, /gitStatus/);
       assert.match(html, /Todo inbox/);
       assert.match(html, /Agent runs/);
-      assert.match(html, /phase-track/);
-      assert.match(html, /api\/dags/);
-      assert.match(html, /compact\(d\.description,96\)/);
-      assert.match(html, /compact\(t\?\.summary\|\|i\.body,120\)/);
-      assert.doesNotMatch(html, /esc\(t\.rationale\)/);
+      assert.match(html, /Active/);
+      assert.match(html, /History/);
+      assert.match(html, /Archived/);
+      assert.match(html, /\/api\/projects\//);
+      assert.match(html, /projectName/);
+      assert.doesNotMatch(html, /Not a valid DAG/);
       assert.match(html, /role="dialog" aria-modal="true"/);
-      assert.match(html, /conversationMessages/);
+      assert.match(html, /aria-labelledby="chatTitle"/);
+      assert.match(html, /Archive this completed DAG/);
       assert.match(html, /legacyQuestion/);
-      assert.match(html, /event\.key==='Enter'&&!event\.shiftKey/);
-      assert.match(html, /event\.key==='Escape'/);
+      assert.match(html, /conversationMessages/);
       assert.match(html, /conversationDrafts/);
       assert.match(html, /autoOpenedQuestions/);
-      assert.doesNotMatch(html, /prompt\('Clarify this todo'\)/);
+      assert.match(html, /event\.key === 'Enter' && !event\.shiftKey/);
+      assert.match(html, /event\.key === 'Escape'/);
+      assert.match(html, /el\('allProjects'\)\.onclick = \(\) => renderHome\(false\)/);
+      assert.match(html, /generation/);
     });
   });
 
   it('starts from the dag-executor --ui CLI path', async () => {
-    const child = spawn(process.execPath, ['build/index.js', '--ui', `--project=${projectDir}`, '--port=0']);
+    const child = spawn(process.execPath, ['build/index.js', '--ui', `--project=${projectDir}`, '--port=0'], {
+      env: { ...process.env, LOOM_ARTIFACTS_DIR: artifactsDir },
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => (stdout += String(chunk)));

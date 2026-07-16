@@ -66,7 +66,7 @@ export const collectIntakeContext = (
     return [{ path: name, content }];
   });
   const inbox = readInbox(projectPath);
-  const dags = discoverDags(projectPath).dags.filter((dag) => dag.status !== 'invalid');
+  const dags = discoverDags(projectPath).dags;
   return {
     projectPath,
     projectName: basename(projectPath),

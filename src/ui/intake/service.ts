@@ -3,10 +3,10 @@ import { collectIntakeContext } from './context.js';
 import { buildSequentialPlan } from './plan.js';
 import {
   acquireIntakeJobLease,
-  addIntakeJob,
   readCheckpoint,
   setIntakePolicy,
   StaleProposalError,
+  updateInboxFile,
   updateInboxItem,
   updateIntakeJob,
   writePlan,
@@ -15,7 +15,7 @@ import { decideIntake } from './policy.js';
 import { SequentialRunner } from './sequential-runner.js';
 import { buildTriagePrompt, CodexTriageProvider, parseTriageResult } from './triage.js';
 import { readInbox } from '../inbox.js';
-import type { TriageProvider, UiIntakePolicy, UiTriageResult } from './types.js';
+import type { TriageProvider, UiIntakeJob, UiIntakePolicy, UiTriageResult } from './types.js';
 import { CodexDagPlanner, type DagPlanner } from './dag-planner.js';
 import { SupervisorQueueClient } from '../../supervisor-queue.js';
 import { isPidAlive } from '../../pid.js';
@@ -106,7 +106,7 @@ export class IntakeService {
     const revision = (item.triage?.proposalRevision ?? 0) + 1;
     const jobId = `job-${this.id()}`;
     const ts = this.now();
-    const persistedJob = addIntakeJob(this.projectPath, {
+    const job: UiIntakeJob = {
       id: jobId,
       itemId,
       kind: 'triage',
@@ -119,14 +119,21 @@ export class IntakeService {
       leaseAt: null,
       attempts: 0,
       error: null,
+    };
+    let persistedJobId = jobId;
+    updateInboxFile(this.projectPath, (file) => {
+      const existing = file.jobs.find((candidate) => candidate.idempotencyKey === job.idempotencyKey);
+      if (existing) persistedJobId = existing.id;
+      let found = false;
+      const items = file.items.map((value) => {
+        if (value.id !== itemId) return value;
+        found = true;
+        return { ...value, intakeStatus: 'triaging' as const, lastError: null, updatedAt: ts };
+      });
+      if (!found) throw new Error(`Inbox item "${itemId}" not found`);
+      return { ...file, items, jobs: existing ? file.jobs : [...file.jobs, job] };
     });
-    updateInboxItem(this.projectPath, itemId, (value) => ({
-      ...value,
-      intakeStatus: 'triaging',
-      lastError: null,
-      updatedAt: ts,
-    }));
-    if (persistedJob.id === jobId) queueMicrotask(() => void this.processTriage(jobId, itemId, revision));
+    if (persistedJobId === jobId) queueMicrotask(() => void this.processTriage(jobId, itemId, revision));
   }
 
   clarify(itemId: string, revision: number, answer: string): void {

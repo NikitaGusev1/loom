@@ -22,6 +22,9 @@ export const UI_IGNORED_DIRS = new Set([
 ]);
 
 const IGNORED_FILENAMES = new Set(['package.json', 'package-lock.json', 'tsconfig.json']);
+const MAX_DISCOVERY_FILES = 5_000;
+const MAX_DISCOVERY_DEPTH = 32;
+const MAX_JSON_BYTES = 2 * 1024 * 1024;
 
 const toMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -31,15 +34,18 @@ const isCandidateDagPath = (path: string): boolean =>
   !path.endsWith('.supervisor.json') &&
   !IGNORED_FILENAMES.has(basename(path));
 
-const walkJson = (dir: string, out: string[]): void => {
+const walkJson = (dir: string, out: string[], depth = 0): boolean => {
+  if (depth > MAX_DISCOVERY_DEPTH || out.length >= MAX_DISCOVERY_FILES) return true;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (out.length >= MAX_DISCOVERY_FILES) return true;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (!UI_IGNORED_DIRS.has(entry.name)) walkJson(path, out);
+      if (!UI_IGNORED_DIRS.has(entry.name) && walkJson(path, out, depth + 1)) return true;
       continue;
     }
     if (entry.isFile() && isCandidateDagPath(path)) out.push(path);
   }
+  return false;
 };
 
 const isoMtime = (path: string): string | null => {
@@ -87,7 +93,13 @@ export const discoverDags = (projectPath: string): DiscoverDagsResult => {
   const candidates: string[] = [];
 
   try {
-    walkJson(projectPath, candidates);
+    if (walkJson(projectPath, candidates)) {
+      errors.push({
+        scope: 'project',
+        path: projectPath,
+        message: 'DAG discovery limit reached; results may be incomplete',
+      });
+    }
   } catch (err) {
     return {
       projectPath,
@@ -96,7 +108,8 @@ export const discoverDags = (projectPath: string): DiscoverDagsResult => {
     };
   }
 
-  const dags = candidates.sort().map((path): UiDagListItem => {
+  const dags: UiDagListItem[] = [];
+  for (const path of candidates.sort()) {
     const eventLogPath = getEventLogPath(path);
     const statePath = getStatePath(path);
     const base = {
@@ -107,10 +120,29 @@ export const discoverDags = (projectPath: string): DiscoverDagsResult => {
       updatedAt: maxIso([isoMtime(path), isoMtime(eventLogPath), isoMtime(statePath)]),
     };
 
+    let parsed: unknown;
     try {
-      const dag = validateDAG(JSON.parse(readFileSync(path, 'utf-8')));
+      if (statSync(path).size > MAX_JSON_BYTES) continue;
+      parsed = JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      continue;
+    }
+
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed) ||
+      !('meta' in parsed) ||
+      !('tasks' in parsed) ||
+      !('executionLayers' in parsed)
+    ) {
+      continue;
+    }
+
+    try {
+      const dag = validateDAG(parsed);
       const counts = stateCounts(statePath);
-      return {
+      dags.push({
         ...base,
         id: dag.meta.id,
         title: dag.meta.source.title,
@@ -120,21 +152,11 @@ export const discoverDags = (projectPath: string): DiscoverDagsResult => {
         failedTasks: counts?.failedTasks ?? 0,
         runningTasks: counts?.runningTasks ?? 0,
         errors: [],
-      };
-    } catch (err) {
-      return {
-        ...base,
-        id: base.relativePath,
-        title: base.relativePath,
-        status: 'invalid',
-        totalTasks: 0,
-        completedTasks: 0,
-        failedTasks: 0,
-        runningTasks: 0,
-        errors: [{ scope: 'dag', path, message: toMessage(err) }],
-      };
+      });
+    } catch {
+      // Rejected JSON encountered during broad discovery is unrelated project data.
     }
-  });
+  }
 
   return { projectPath, dags, errors };
 };

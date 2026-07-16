@@ -31,4 +31,34 @@ describe('intake runtime contracts', () => {
     );
     assert.equal(sequentialCheckpointSchema.safeParse({ schemaVersion: 1, id: 'run' }).success, false);
   });
+
+  it('rejects checkpoint IDs that are unsafe as filenames', () => {
+    const base = {
+      schemaVersion: 1,
+      id: 'run-1',
+      itemId: 'todo-1',
+      proposalRevision: 1,
+      mode: 'sequential',
+      status: 'queued',
+      phase: 'plan',
+      createdAt: 'now',
+      updatedAt: 'now',
+      startedAt: null,
+      completedAt: null,
+      planPath: 'plan',
+      logPath: 'log',
+      provider: 'codex',
+      model: 'account-default',
+      pid: null,
+      baseCommit: null,
+      terminalCommit: null,
+      changedFiles: [],
+      verification: null,
+      reviewVerdict: null,
+      error: null,
+      recoveryRequired: false,
+    };
+    assert.equal(sequentialCheckpointSchema.safeParse(base).success, true);
+    assert.equal(sequentialCheckpointSchema.safeParse({ ...base, id: '../../outside' }).success, false);
+  });
 });
