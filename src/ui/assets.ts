@@ -80,7 +80,7 @@ export const UI_HTML = `<!doctype html>
     .home{min-height:100%;padding:34px;max-width:1200px;margin:auto}.home-head{display:flex;align-items:end;justify-content:space-between;margin-bottom:26px}.brand{font-size:18px;font-weight:750}.mark{display:inline-block;width:17px;height:17px;margin-right:9px;border:2px solid var(--green);transform:rotate(45deg)}h1{font-size:29px;margin:8px 0 0}.eyebrow{color:var(--soft);font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}.projects{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}.project-card{border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:17px;text-align:left;cursor:pointer}.project-card:hover{border-color:#4a535f;background:var(--raised)}.project-card:disabled{cursor:default;opacity:.55}.card-head,.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.project-card strong{font-size:18px}.path{margin:5px 0 17px;color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.card-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.card-metrics div{padding:8px;background:#0d1014;border-radius:5px}.card-metrics b{display:block;font:600 17px ui-monospace,monospace}.warning{color:var(--yellow)}.error{color:var(--red)}
     .app{height:100vh;display:grid;grid-template-columns:230px minmax(560px,1fr) 330px}.sidebar{min-width:0;padding:17px 12px;border-right:1px solid var(--line);background:#0e1115;display:flex;flex-direction:column;gap:14px}.all-projects,.nav-button,.dag-button,.task,.run-card,.icon-button,.primary{border:0;border-radius:5px;cursor:pointer}.all-projects{background:transparent;text-align:left;color:var(--soft);padding:6px}.all-projects:hover{background:var(--raised);color:var(--ink)}.project-name{font-size:17px;font-weight:700;padding:0 6px;overflow:hidden;text-overflow:ellipsis}.git-status{padding:0 6px;color:var(--soft);font-size:12px}.view-nav,.dag-tabs{display:grid;gap:5px}.view-nav{grid-template-columns:1fr 1fr}.dag-tabs{grid-template-columns:repeat(3,1fr)}.nav-button{border:1px solid var(--line);background:transparent;padding:7px;font-size:13px}.nav-button.active{background:var(--raised);border-color:#4a535f}.dag-list{min-height:0;overflow:auto;display:grid;align-content:start;gap:3px}.dag-button{width:100%;background:transparent;padding:9px 8px;text-align:left;display:grid;grid-template-columns:8px 1fr;gap:8px}.dag-button:hover,.dag-button.active{background:var(--raised)}.dag-button.active{box-shadow:inset 2px 0 var(--green)}.dot{width:7px;height:7px;margin-top:6px;border-radius:50%;background:var(--soft)}.dot.running{background:var(--green)}.dot.paused,.dot.failed{background:var(--yellow)}.dag-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.subtle{color:var(--soft);font-size:12px}.slots{margin-top:auto;border-top:1px solid var(--line);padding:13px 6px 0}
     .workspace{min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr) 170px}.topbar{padding:18px 20px 15px;border-bottom:1px solid var(--line)}.title-row{display:flex;align-items:center;justify-content:space-between;gap:15px}.title-row h1{font-size:22px;margin:2px 0}.status{color:var(--green);font-size:12px;text-transform:uppercase;font-weight:750}.metrics{display:flex;gap:28px;align-items:center;margin-top:14px}.metric b{display:block;font:600 18px ui-monospace,monospace}.progress{height:5px;flex:1;max-width:370px;background:#252a31;border-radius:4px;overflow:hidden}.progress span{display:block;height:100%;width:0;background:var(--green)}.board-wrap{min-height:0;padding:15px 20px;overflow:hidden}.board{height:100%;display:grid;grid-template-columns:repeat(6,minmax(125px,1fr));gap:8px;overflow:auto}.lane{background:#0f1216;border:1px solid var(--line);border-radius:6px;padding:9px;overflow:auto}.lane-title{text-transform:uppercase;color:var(--soft);font-size:11px;font-weight:700;display:flex;justify-content:space-between}.task{width:100%;border:1px solid #242a32;background:var(--raised);padding:9px;margin-top:6px;text-align:left}.task.active{border-color:var(--blue)}.runs-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-content:start}.run-card{border:1px solid var(--line);background:var(--surface);padding:11px;text-align:left}.events-panel{border-top:1px solid var(--line);padding:12px 20px;overflow:auto}.events{font:12px/1.65 ui-monospace,monospace;color:#aab1bb}.event{display:grid;grid-template-columns:75px 1fr}
-    .rail{min-width:0;min-height:0;border-left:1px solid var(--line);background:#0e1115;display:grid;grid-template-rows:minmax(230px,1fr) minmax(270px,1fr)}.rail-panel{min-height:0;overflow:auto;padding:17px 15px;border-bottom:1px solid var(--line)}.task-detail h2{font-size:18px;margin:8px 0}.label{color:var(--soft);font-size:11px;text-transform:uppercase;font-weight:700;margin-top:13px}.code{font:12px ui-monospace,monospace;word-break:break-word}textarea{width:100%;height:75px;resize:none;margin-top:9px;padding:9px;color:var(--ink);background:#0a0c0f;border:1px solid #303640;border-radius:5px}.primary{padding:7px 10px;background:var(--ink);color:#101216;font-weight:700}.primary:disabled{opacity:.45}.compose{display:flex;justify-content:space-between;align-items:center;margin-top:7px}.compose-feedback{display:grid;gap:2px}.inbox{margin-top:13px;display:grid;gap:6px}.inbox-item{border:1px solid var(--line);border-radius:5px;padding:9px;background:var(--surface)}.actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.icon-button{background:transparent;color:var(--soft);padding:4px 6px}.icon-button:hover{color:var(--ink);background:var(--raised)}.diagnostics{font-size:12px;color:var(--yellow);padding:0 6px}.empty{color:var(--soft);padding:13px 0}
+    .rail{min-width:0;min-height:0;border-left:1px solid var(--line);background:#0e1115;display:grid;grid-template-rows:minmax(230px,1fr) minmax(270px,1fr)}.rail-panel{min-height:0;overflow:auto;padding:17px 15px;border-bottom:1px solid var(--line)}.task-detail h2{font-size:18px;margin:8px 0}.label{color:var(--soft);font-size:11px;text-transform:uppercase;font-weight:700;margin-top:13px}.code{font:12px ui-monospace,monospace;word-break:break-word}textarea{width:100%;height:75px;resize:none;margin-top:9px;padding:9px;color:var(--ink);background:#0a0c0f;border:1px solid #303640;border-radius:5px}.primary{padding:7px 10px;background:var(--ink);color:#101216;font-weight:700}.primary:disabled{opacity:.45}.compose{display:flex;justify-content:space-between;align-items:center;margin-top:7px}.compose-feedback{display:grid;gap:2px}.inbox{margin-top:13px;display:grid;gap:6px}.inbox-item{border:1px solid var(--line);border-radius:5px;padding:9px;background:var(--surface)}.proposal-state{margin-top:4px}.agent-details{margin-top:7px;color:var(--soft);font-size:12px}.agent-details summary{cursor:pointer;color:var(--soft)}.agent-details .code{margin-top:5px;white-space:pre-wrap}.pr-context{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.pr-context a{color:var(--blue)}.actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.icon-button{background:transparent;color:var(--soft);padding:4px 6px}.icon-button:hover{color:var(--ink);background:var(--raised)}.diagnostics{font-size:12px;color:var(--yellow);padding:0 6px}.empty{color:var(--soft);padding:13px 0}
     .modal{position:fixed;inset:0;background:#050608bb;display:grid;place-items:center;padding:20px}.dialog{width:min(600px,100%);background:var(--surface);border:1px solid #3b424d;border-radius:9px;padding:17px}.messages{max-height:320px;overflow:auto;display:grid;gap:8px;margin:13px 0}.bubble{padding:9px;border-radius:7px;background:var(--raised);white-space:pre-wrap}.bubble.user{background:#254a7d;margin-left:15%}.phase-track{display:grid;grid-template-columns:repeat(6,1fr);gap:3px;margin:14px 0}.phase-step{padding:6px 2px;text-align:center;border-bottom:3px solid var(--line);font-size:11px;color:var(--soft)}.phase-step.done{color:var(--ink);border-color:var(--green)}
     @media(max-width:1000px){.app{grid-template-columns:200px minmax(500px,1fr)}.rail{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:320px}.workspace{min-height:700px}}
   </style>
@@ -158,6 +158,36 @@ export const UI_HTML = `<!doctype html>
       return Number.isNaN(date.valueOf()) ? '--:--:--' : date.toLocaleTimeString([], { hour12: false });
     };
     const fmtActivity = (timestamp) => timestamp ? new Date(timestamp).toLocaleString() : 'No activity yet';
+    const textList = (value) => Array.isArray(value) ? value.join(', ') : (value == null ? '' : String(value));
+    const agentDetailText = (proposal) => textList(proposal?.agentDetails || proposal?.agents || proposal?.agentNotes || proposal?.details);
+    const proposalFor = (item) => item.triage?.proposal || item.proposal || item.triage || {};
+    const proposalContext = (item) => {
+      const proposal = proposalFor(item);
+      const planningState = proposal.planningState || proposal.state || proposal.status || item.intakeStatus || item.status;
+      const concise = proposal.summary || proposal.title || item.triage?.summary || item.body;
+      const details = agentDetailText(proposal);
+      return '<div>' + esc(concise) + '</div><div class="subtle proposal-state">Planning: ' + esc(planningState) +
+        '</div>' + (details ? '<details class="agent-details"><summary>Agent details</summary><div class="code">' +
+          esc(details) + '</div></details>' : '');
+    };
+    const httpsPrUrl = (value) => {
+      try {
+        const url = new URL(String(value || ''));
+        return url.protocol === 'https:' ? url.href : '';
+      } catch {
+        return '';
+      }
+    };
+    const prContext = (run, checkpoint, detail) => {
+      const pr = detail.pullRequest || checkpoint.pullRequest || run.pullRequest || {};
+      const state = String(pr.state || pr.status || checkpoint.prState || run.prState || detail.prState || 'disabled').toLowerCase();
+      const label = ['creating', 'created', 'failed', 'disabled'].includes(state) ? state : 'disabled';
+      const url = httpsPrUrl(pr.url || pr.htmlUrl || checkpoint.prUrl || run.prUrl || detail.prUrl);
+      const message = pr.message || pr.error || checkpoint.prError || run.prError || detail.prError;
+      const link = label === 'created' && url ? ' <a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">Open pull request</a>' : '';
+      return '<div class="pr-context"><div class="label">Pull request</div><div>PR ' + esc(label) + link +
+        (message ? '<div class="error subtle">' + esc(message) + '</div>' : '') + '</div></div>';
+    };
 
     function clearDetail() {
       state.detail = null;
@@ -409,10 +439,12 @@ export const UI_HTML = `<!doctype html>
           esc(detail.checkpoint.changedFiles.join(', ') || 'None yet') + '</div><div class="label">Verification</div><div>' +
           esc(detail.checkpoint.verification || 'Pending') + '</div><div class="label">Review</div><div>' +
           esc(detail.checkpoint.reviewVerdict || 'Pending') + '</div>' +
+          prContext(run, detail.checkpoint || {}, detail) +
           (detail.checkpoint.recoveryRequired ? '<p class="error">Recovery review required: inspect dirty project state.</p>' : '');
       } else {
         el('taskDetail').innerHTML = '<div class="status">' + esc(run.status) +
-          '</div><h2>DAG runner</h2><div class="code">' + esc(detail.dagPath) + '</div>';
+          '</div><h2>DAG runner</h2><div class="code">' + esc(detail.dagPath) + '</div>' +
+          prContext(run, detail.checkpoint || {}, detail);
       }
     }
 
@@ -446,8 +478,8 @@ export const UI_HTML = `<!doctype html>
       if (!isCurrent(context)) return;
       state.inbox = data.items.filter((item) => item.status !== 'archived');
       el('autoRun').checked = data.policy.autoRunEnabled;
-      el('inboxItems').innerHTML = state.inbox.map((item) => '<div class="inbox-item"><div>' +
-        esc(item.triage?.summary || item.body) + '</div><div class="subtle">' + esc(item.intakeStatus || item.status) +
+      el('inboxItems').innerHTML = state.inbox.map((item) => '<div class="inbox-item">' + proposalContext(item) +
+        '<div class="subtle">' + esc(item.intakeStatus || item.status) +
         '</div>' + (item.lastError ? '<div class="error subtle">' + esc(item.lastError) + '</div>' : '') +
         '<div class="actions">' + actionsFor(item) + '</div></div>').join('') ||
         '<div class="empty">Inbox is clear.</div>';

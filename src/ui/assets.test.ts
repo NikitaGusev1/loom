@@ -59,6 +59,15 @@ describe('Loom UI assets', () => {
     assert.doesNotThrow(() => new Function(script));
   });
 
+  it('keeps approval context concise and presents safe PR lifecycle detail', () => {
+    assert.match(UI_HTML, /Planning: /);
+    assert.match(UI_HTML, /<details class="agent-details"><summary>Agent details<\/summary>/);
+    assert.match(UI_HTML, /\['creating', 'created', 'failed', 'disabled'\]/);
+    assert.match(UI_HTML, /url\.protocol === 'https:'/);
+    assert.match(UI_HTML, /Open pull request/);
+    assert.match(UI_HTML, /rel="noopener noreferrer"/);
+  });
+
   it('submits trimmed text on Enter but preserves Shift+Enter and IME composition', async () => {
     const value = composer();
     value.input.value = '  add keyboard support  ';
