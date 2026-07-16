@@ -49,11 +49,18 @@ describe('typed supervisor queue reader', () => {
     writeFileSync(path, JSON.stringify({ schemaVersion: 1, updatedAt: 'now', items: [item] }));
     assert.deepEqual(readSupervisorQueue(path).items[0], item);
 
-    writeFileSync(path, JSON.stringify({ schemaVersion: 1, updatedAt: 'now', items: [{ ...item, status: 'unknown' }] }));
+    writeFileSync(
+      path,
+      JSON.stringify({ schemaVersion: 1, updatedAt: 'now', items: [{ ...item, status: 'unknown' }] }),
+    );
     assert.throws(() => readSupervisorQueue(path), /Invalid supervisor queue item/);
     writeFileSync(
       path,
-      JSON.stringify({ schemaVersion: 1, updatedAt: 'now', items: [{ ...item, executionArtifactPaths: { checkpoint: '../other.json' } }] }),
+      JSON.stringify({
+        schemaVersion: 1,
+        updatedAt: 'now',
+        items: [{ ...item, executionArtifactPaths: { checkpoint: '../other.json' } }],
+      }),
     );
     assert.throws(() => readSupervisorQueue(path), /Invalid supervisor queue item/);
   });

@@ -103,7 +103,19 @@ describe('IntakeService', () => {
         await new Promise<void>((resolve) => {
           resolvePlanner = resolve;
         });
-        return { planPath: `${dir}/plan.md`, dagPath: `${dir}/dag.json` };
+        return {
+          planPath: `${dir}/plan.md`,
+          dagPath: `${dir}/dag.json`,
+          proposalSnapshotPath: `${dir}/proposal.json`,
+          proposalRevision: 1,
+          summary: 'Ambiguous feature',
+          rationale: 'Clarification limit reached',
+          risk: 'elevated',
+          taskCount: 1,
+          layerCount: 1,
+          affectedFiles: [],
+          affectedFilesOverflow: 0,
+        };
       },
     };
     const provider: TriageProvider = {

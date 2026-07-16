@@ -38,7 +38,10 @@ export interface SupervisorQueue {
 export const defaultSupervisorQueuePath = (projectPath: string): string =>
   join(projectPath, '.loom-supervisor', 'queue.json');
 
-export const readSupervisorQueue = (queuePath: string, projectPath = dirnameProjectPath(queuePath)): SupervisorQueue => {
+export const readSupervisorQueue = (
+  queuePath: string,
+  projectPath = dirnameProjectPath(queuePath),
+): SupervisorQueue => {
   if (!existsSync(queuePath)) return { schemaVersion: 1, updatedAt: '', items: [] };
   const value = JSON.parse(readFileSync(queuePath, 'utf-8')) as Partial<SupervisorQueue>;
   if (value.schemaVersion !== 1 || typeof value.updatedAt !== 'string' || !Array.isArray(value.items))
@@ -113,13 +116,25 @@ const validStatuses = new Set<SupervisorQueueItem['status']>([
 const dirnameProjectPath = (queuePath: string): string => resolve(queuePath, '..', '..');
 
 const isValidQueueItem = (item: unknown, projectPath: string): item is SupervisorQueueItem => {
-  if (!isRecord(item) || typeof item.id !== 'string' || item.id.length === 0 || typeof item.dagPath !== 'string' || item.dagPath.length === 0 ||
-    !validStatuses.has(item.status as SupervisorQueueItem['status']) || !Number.isFinite(item.priority)) {
+  if (
+    !isRecord(item) ||
+    typeof item.id !== 'string' ||
+    item.id.length === 0 ||
+    typeof item.dagPath !== 'string' ||
+    item.dagPath.length === 0 ||
+    !validStatuses.has(item.status as SupervisorQueueItem['status']) ||
+    !Number.isFinite(item.priority)
+  ) {
     return false;
   }
-  if (!optionalString(item.createdAt) || !optionalString(item.updatedAt) ||
-    !optionalNumber(item.supervisorPid) || !optionalString(item.executionId) ||
-    !optionalString(item.correlationId) || !optionalString(item.sourceDefinition)) {
+  if (
+    !optionalString(item.createdAt) ||
+    !optionalString(item.updatedAt) ||
+    !optionalNumber(item.supervisorPid) ||
+    !optionalString(item.executionId) ||
+    !optionalString(item.correlationId) ||
+    !optionalString(item.sourceDefinition)
+  ) {
     return false;
   }
   return isIsolatedArtifactPaths(item.executionArtifactPaths, projectPath);
@@ -128,14 +143,17 @@ const isValidQueueItem = (item: unknown, projectPath: string): item is Superviso
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const optionalString = (value: unknown): boolean => value === undefined || (typeof value === 'string' && value.length > 0);
-const optionalNumber = (value: unknown): boolean => value === undefined || (typeof value === 'number' && Number.isFinite(value));
+const optionalString = (value: unknown): boolean =>
+  value === undefined || (typeof value === 'string' && value.length > 0);
+const optionalNumber = (value: unknown): boolean =>
+  value === undefined || (typeof value === 'number' && Number.isFinite(value));
 
 const isIsolatedArtifactPaths = (value: unknown, projectPath: string): boolean => {
   if (value === undefined) return true;
   if (!isRecord(value)) return false;
-  return Object.entries(value).every(([name, path]) =>
-    name.length > 0 && typeof path === 'string' && path.length > 0 && isPathInsideProject(path, projectPath),
+  return Object.entries(value).every(
+    ([name, path]) =>
+      name.length > 0 && typeof path === 'string' && path.length > 0 && isPathInsideProject(path, projectPath),
   );
 };
 
@@ -143,6 +161,9 @@ const isPathInsideProject = (path: string, projectPath: string): boolean => {
   const projectRoot = resolve(projectPath);
   const artifactPath = resolve(projectRoot, path);
   const pathToArtifact = relative(projectRoot, artifactPath);
-  return pathToArtifact !== '' && !pathToArtifact.startsWith('..') &&
-    !pathToArtifact.includes(`..${process.platform === 'win32' ? '\\' : '/'}`);
+  return (
+    pathToArtifact !== '' &&
+    !pathToArtifact.startsWith('..') &&
+    !pathToArtifact.includes(`..${process.platform === 'win32' ? '\\' : '/'}`)
+  );
 };

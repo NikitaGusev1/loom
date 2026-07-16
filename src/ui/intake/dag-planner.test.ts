@@ -53,20 +53,43 @@ describe('DAG proposals', () => {
     const projectPath = mkdtempSync(join(tmpdir(), 'dag-proposal-'));
     try {
       const item = {
-        id: 'todo-1', createdAt: 'now', updatedAt: 'now', body: 'Improve intake', status: 'open', source: 'ui',
-        linkedDagPath: null, linkedTaskId: null,
+        id: 'todo-1',
+        createdAt: 'now',
+        updatedAt: 'now',
+        body: 'Improve intake',
+        status: 'open',
+        source: 'ui',
+        linkedDagPath: null,
+        linkedTaskId: null,
       } satisfies UiInboxItem;
       const triage = {
-        version: 1, status: 'complete', relevance: 'relevant', complexity: 'medium', risk: 'medium', confidence: 0.9,
-        summary: 'Improve intake', rationale: 'Clear scope', needsClarification: false, questions: [], estimatedFiles: [],
-        proposedAction: 'propose-dag', evaluatedAt: 'now', proposalRevision: 3,
+        version: 1,
+        status: 'complete',
+        relevance: 'relevant',
+        complexity: 'medium',
+        risk: 'elevated',
+        confidence: 0.9,
+        summary: 'Improve intake',
+        rationale: 'Clear scope',
+        needsClarification: false,
+        questions: [],
+        estimatedFiles: [],
+        proposedAction: 'propose-dag',
+        evaluatedAt: 'now',
+        proposalRevision: 3,
       } satisfies UiTriageResult;
-      const proposal = deriveDagProposal(projectPath, item, triage, { planPath: '/plan', dagPath: '/dag' }, {
-        tasks: [
-          { id: 'first', files: ['src/a.ts', 'src/b.ts'] },
-          { id: 'second', dependsOn: ['first'], affectedFiles: ['src/b.ts', 'src/c.ts'] },
-        ],
-      });
+      const proposal = deriveDagProposal(
+        projectPath,
+        item,
+        triage,
+        { planPath: '/plan', dagPath: '/dag' },
+        {
+          tasks: [
+            { id: 'first', files: ['src/a.ts', 'src/b.ts'] },
+            { id: 'second', dependsOn: ['first'], affectedFiles: ['src/b.ts', 'src/c.ts'] },
+          ],
+        },
+      );
 
       persistDagProposal(proposal);
       assert.equal(proposal.proposalRevision, 3);

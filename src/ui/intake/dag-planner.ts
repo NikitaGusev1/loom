@@ -49,15 +49,19 @@ const layerCountFor = (dag: ValidatedDag, tasks: DagTask[]): number => {
   if (Array.isArray(dag.layers)) return dag.layers.length;
   if (tasks.length === 0) return 0;
 
-  const ids = new Set(tasks.map((task, index) => typeof task.id === 'string' ? task.id : String(index)));
-  const remaining = new Map(tasks.map((task, index) => {
-    const id = typeof task.id === 'string' ? task.id : String(index);
-    const dependencies = strings(task.dependsOn ?? task.dependencies).filter((dependency) => ids.has(dependency));
-    return [id, dependencies] as const;
-  }));
+  const ids = new Set(tasks.map((task, index) => (typeof task.id === 'string' ? task.id : String(index))));
+  const remaining = new Map(
+    tasks.map((task, index) => {
+      const id = typeof task.id === 'string' ? task.id : String(index);
+      const dependencies = strings(task.dependsOn ?? task.dependencies).filter((dependency) => ids.has(dependency));
+      return [id, dependencies] as const;
+    }),
+  );
   let layers = 0;
   while (remaining.size > 0) {
-    const ready = [...remaining].filter(([, dependencies]) => dependencies.every((dependency) => !remaining.has(dependency)));
+    const ready = [...remaining].filter(([, dependencies]) =>
+      dependencies.every((dependency) => !remaining.has(dependency)),
+    );
     if (ready.length === 0) return layers + 1;
     for (const [id] of ready) remaining.delete(id);
     layers += 1;
@@ -73,10 +77,9 @@ export const deriveDagProposal = (
   dag: ValidatedDag,
 ): DagProposal => {
   const tasks = tasksFor(dag);
-  const files = [...new Set([
-    ...strings(dag.affectedFiles),
-    ...tasks.flatMap((task) => strings(task.affectedFiles ?? task.files)),
-  ])].sort();
+  const files = [
+    ...new Set([...strings(dag.affectedFiles), ...tasks.flatMap((task) => strings(task.affectedFiles ?? task.files))]),
+  ].sort();
   const proposalSnapshotPath = join(
     projectPath,
     '.claude',
@@ -112,7 +115,10 @@ export class CodexDagPlanner implements DagPlanner {
       cwd: projectPath,
     });
     const parsed = JSON.parse(result.trace.lastAssistantText) as DagProposal;
-    const artifactPaths = { planPath: within(projectPath, parsed.planPath), dagPath: within(projectPath, parsed.dagPath) };
+    const artifactPaths = {
+      planPath: within(projectPath, parsed.planPath),
+      dagPath: within(projectPath, parsed.dagPath),
+    };
     const dag = JSON.parse(readFileSync(artifactPaths.dagPath, 'utf-8')) as ValidatedDag;
     validateDAG(dag);
     const proposal = deriveDagProposal(projectPath, item, triage, artifactPaths, dag);
