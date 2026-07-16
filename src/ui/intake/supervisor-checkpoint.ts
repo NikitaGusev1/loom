@@ -41,7 +41,10 @@ function isContained(projectPath: string, candidate: string): boolean {
   const root = resolve(projectPath);
   const resolved = resolve(root, candidate);
   const pathToCandidate = relative(root, resolved);
-  return pathToCandidate === '' || (!pathToCandidate.startsWith('..') && !pathToCandidate.includes(`..${String.fromCharCode(47)}`));
+  return (
+    pathToCandidate === '' ||
+    (!pathToCandidate.startsWith('..') && !pathToCandidate.includes(`..${String.fromCharCode(47)}`))
+  );
 }
 
 function artifactValue(queueItem: SupervisorQueueItem): unknown {
@@ -99,8 +102,11 @@ export function projectDagExecutionStatus(status: unknown): UiRunStatus {
 
 function taskProgress(checkpoint: UnknownRecord): UiDagTaskProgress {
   const tasks = Array.isArray(checkpoint.tasks) ? checkpoint.tasks : null;
-  const total = number(checkpoint.totalTasks) ?? (tasks?.length ?? 0);
-  const completed = number(checkpoint.completedTasks) ?? (tasks?.filter((task) => isRecord(task) && projectDagExecutionStatus(task.status) === 'completed').length ?? 0);
+  const total = number(checkpoint.totalTasks) ?? tasks?.length ?? 0;
+  const completed =
+    number(checkpoint.completedTasks) ??
+    tasks?.filter((task) => isRecord(task) && projectDagExecutionStatus(task.status) === 'completed').length ??
+    0;
   return { completed: Math.max(0, Math.min(completed, total)), total: Math.max(0, total) };
 }
 
@@ -146,7 +152,8 @@ export function readSupervisorCheckpoint(
 
   if (!SAFE_QUEUE_ID.test(queueItem.id)) diagnostic(diagnostics, 'Queue item ID is not safe for artifact lookup.');
   if (sourceCandidate) {
-    if (!projectPath || !isContained(projectPath, sourceCandidate)) diagnostic(diagnostics, 'Source definition path is outside the selected project.');
+    if (!projectPath || !isContained(projectPath, sourceCandidate))
+      diagnostic(diagnostics, 'Source definition path is outside the selected project.');
     else sourcePath = resolve(projectPath, sourceCandidate);
   }
 
@@ -160,8 +167,11 @@ export function readSupervisorCheckpoint(
       if (rawCheckpoint === undefined) {
         if (!existsSync(checkpointPath)) diagnostic(diagnostics, 'Checkpoint file does not exist.');
         else {
-          try { rawCheckpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as unknown; }
-          catch { diagnostic(diagnostics, 'Checkpoint file could not be parsed.'); }
+          try {
+            rawCheckpoint = JSON.parse(readFileSync(checkpointPath, 'utf8')) as unknown;
+          } catch {
+            diagnostic(diagnostics, 'Checkpoint file could not be parsed.');
+          }
         }
       }
     }

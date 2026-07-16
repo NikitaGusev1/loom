@@ -19,7 +19,10 @@ test('projects bounded UI checkpoint and pull request fields from queue artifact
     executionArtifacts: {
       'queue-17': {
         checkpoint: {
-          id: 'run-9', status: 'succeeded', createdAt: '2026-01-01', updatedAt: '2026-01-02',
+          id: 'run-9',
+          status: 'succeeded',
+          createdAt: '2026-01-01',
+          updatedAt: '2026-01-02',
           tasks: [{ status: 'succeeded' }, { status: 'running' }],
           pullRequest: { number: 91, htmlUrl: 'https://example.test/pr/91', status: 'open', ignored: true },
           ignored: { nested: true },
@@ -28,7 +31,11 @@ test('projects bounded UI checkpoint and pull request fields from queue artifact
     },
   });
   assert.deepEqual(result.checkpoint, {
-    id: 'run-9', status: 'completed', createdAt: '2026-01-01', updatedAt: '2026-01-02', dagPath: null,
+    id: 'run-9',
+    status: 'completed',
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-02',
+    dagPath: null,
     taskProgress: { completed: 1, total: 2 },
     pullRequest: { number: 91, url: 'https://example.test/pr/91', status: 'open' },
   });
@@ -37,8 +44,11 @@ test('projects bounded UI checkpoint and pull request fields from queue artifact
 
 test('rejects escaping source and checkpoint paths without hiding queue status', () => {
   const result = readSupervisorCheckpoint({
-    id: 'queue-18', projectPath: '/projects/selected', status: 'running',
-    sourceDefinitionPath: '../other/dag.json', checkpointPath: '../other/checkpoint.json',
+    id: 'queue-18',
+    projectPath: '/projects/selected',
+    status: 'running',
+    sourceDefinitionPath: '../other/dag.json',
+    checkpointPath: '../other/checkpoint.json',
   });
   assert.equal(result.checkpoint, null);
   assert.equal(result.status, 'running');
