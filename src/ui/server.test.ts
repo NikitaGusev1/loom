@@ -370,7 +370,7 @@ describe('createUiServer', () => {
     );
   });
 
-  it('exposes intake policy, runs, and triage controls', async () => {
+  it('exposes intake policy and triage controls without treating definitions as runs', async () => {
     let retried = '';
     await withServer(
       async (baseUrl) => {
@@ -379,10 +379,7 @@ describe('createUiServer', () => {
         const retriedResponse = await fetchJson(baseUrl, '/api/inbox/todo-1/triage', { method: 'POST' });
 
         assert.equal(status.json.policy.autoRunEnabled, true);
-        assert.equal(runs.json.runs.length, 1);
-        assert.equal(runs.json.runs[0].mode, 'dag');
-        assert.equal(runs.json.runs[0].status, 'queued');
-        assert.equal(runs.json.runs[0].dagPath, dagPath);
+        assert.equal(runs.json.runs.length, 0);
         assert.equal(retriedResponse.response.status, 202);
         assert.equal(retried, 'todo-1');
       },
