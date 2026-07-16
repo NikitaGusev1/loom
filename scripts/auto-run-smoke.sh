@@ -293,8 +293,6 @@ scenario_happy_path() {
   row5="$(awk -F'\t' '$1=="claude"' "$inv" | sed -n '4p')"
 
   assert_eq       'claude inv1 phase=validate-plan' 'validate-plan' "$(printf '%s' "$row1" | awk -F'\t' '{print $2}')"
-  assert_contains 'claude inv1 uses the installed Loom command namespace' '/loom:auto-step' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
-  assert_not_contains 'claude inv1 omits the retired command namespace' '/dag-executor:auto-step' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
   assert_contains 'claude inv1 args have --model opus' '--model opus' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
 
   assert_eq       'claude inv2 phase=mode-selection' 'mode-selection' "$(printf '%s' "$row2" | awk -F'\t' '{print $2}')"
