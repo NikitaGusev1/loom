@@ -103,9 +103,7 @@ export const runCodexCli = async (
 ): Promise<{ usage?: TaskUsage; trace: SessionTrace }> => {
   const bin = process.env.CODEX_BIN ?? 'codex';
   const modelArgs = options.model && options.model !== 'account-default' ? ['--model', options.model] : [];
-  const reasoningArgs = options.reasoningEffort
-    ? ['-c', `model_reasoning_effort="${options.reasoningEffort}"`]
-    : [];
+  const reasoningArgs = options.reasoningEffort ? ['-c', `model_reasoning_effort="${options.reasoningEffort}"`] : [];
   const args = [
     'exec',
     '--json',
