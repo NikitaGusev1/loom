@@ -3,6 +3,7 @@
 'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -26,6 +27,7 @@ function usage() {
   loom-supervisor --status <dag.json>
   loom-supervisor --stop <dag.json>
   loom-supervisor --queue-add <dag.json> [--priority=N] [dag-executor flags...]
+  loom-supervisor --queue-add <dag.json> [--json]
   loom-supervisor --queue-run
   loom-supervisor --queue-status
   loom-supervisor --queue-pause <item-id>
@@ -48,6 +50,7 @@ Day-run behavior:
   - --status prints checkpoint + DAG task status
   - --stop sends SIGTERM to the PID in the checkpoint
   - --queue=<path> selects a persistent multi-DAG queue file
+  - --json makes --queue-add print its result as JSON (including queueId)
   - on macOS, detached runs use caffeinate when available
 
 Default behavior:
@@ -270,6 +273,7 @@ function parseArgs(argv) {
     queuePriority: false,
     queuePath: undefined,
     priority: 0,
+    json: false,
     help: false,
   };
   const rest = [];
@@ -315,6 +319,7 @@ function parseArgs(argv) {
       flags.priority = Number(requireValue(argv, i, arg));
       i += 1;
     } else if (arg.startsWith('--priority=')) flags.priority = Number(arg.slice('--priority='.length));
+    else if (arg === '--json') flags.json = true;
     else if (arg === '-h' || arg === '--help') flags.help = true;
     else rest.push(arg);
   }
@@ -363,6 +368,80 @@ function writeQueue(queuePath, queue) {
 function queueItemId(dagPath) {
   const base = path.basename(dagPath, path.extname(dagPath)).replace(/[^a-zA-Z0-9_-]+/g, '-');
   return `${base || 'dag'}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function queueCorrelation(dagPath) {
+  const dag = readJson(dagPath) || {};
+  const meta = isRecord(dag.meta) ? dag.meta : {};
+  const source = meta.source === undefined ? { dagId: meta.id || path.basename(dagPath) } : meta.source;
+  const sourceRevision =
+    meta.proposalRevision ??
+    meta.proposal?.revision ??
+    meta.source?.proposalRevision ??
+    meta.source?.proposal?.revision ??
+    meta.source?.revision ??
+    meta.revision ??
+    dag.proposalRevision ??
+    meta.gitCommit ??
+    sha256(fs.readFileSync(dagPath));
+  const sourceKey = sha256(stableJson(source));
+  return {
+    source,
+    sourceKey,
+    sourceRevision: String(sourceRevision),
+    correlationKey: sha256(`${sourceKey}\n${String(sourceRevision)}`),
+  };
+}
+
+function queueExecutionPaths(queuePath, itemId) {
+  const executionDir = path.join(path.dirname(queuePath), 'executions', itemId);
+  const executionDagPath = path.join(executionDir, 'dag.json');
+  const { checkpointPath, logDir } = resolvePaths(executionDagPath);
+  return {
+    executionDir,
+    executionDagPath,
+    statePath: statePathFor(executionDagPath),
+    eventLogPath: eventLogPathFor(executionDagPath),
+    checkpointPath,
+    logDir,
+  };
+}
+
+function createExecutionSnapshot({ dagPath, queuePath, itemId }) {
+  const execution = queueExecutionPaths(queuePath, itemId);
+  fs.mkdirSync(path.dirname(execution.executionDir), { recursive: true });
+  fs.mkdirSync(execution.executionDir, { recursive: false });
+  try {
+    fs.copyFileSync(dagPath, execution.executionDagPath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(execution.executionDagPath, 0o444);
+  } catch (err) {
+    fs.rmSync(execution.executionDir, { recursive: true, force: true });
+    throw err;
+  }
+  return execution;
+}
+
+function queueItemCorrelationMatches(item, correlation) {
+  if (item?.correlationKey) return item.correlationKey === correlation.correlationKey;
+  return (
+    (item?.sourceDagPath || item?.dagPath) === correlation.sourceDagPath &&
+    item?.sourceRevision === correlation.sourceRevision
+  );
 }
 
 function withQueueLock(queuePath, fn) {
@@ -443,7 +522,7 @@ function validatePriority(priority) {
   return priority;
 }
 
-function addQueueItem({ queuePath, dagArg, userArgs, priority, allowDirtyRepo, createPr }) {
+function addQueueItem({ queuePath, dagArg, userArgs, priority, allowDirtyRepo, createPr, json }) {
   if (!dagArg) {
     console.error('[loom-supervisor] --queue-add requires a DAG path');
     return 1;
@@ -468,24 +547,46 @@ function addQueueItem({ queuePath, dagArg, userArgs, priority, allowDirtyRepo, c
     return 1;
   }
 
-  const item = {
-    id: queueItemId(dagPath),
-    dagPath,
-    repoRoot: String(repoRootProbe.stdout || '').trim(),
-    args: userArgs,
-    allowDirtyRepo,
-    createPr,
-    priority: validatePriority(priority),
-    status: 'queued',
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-    attempts: 0,
-  };
-
+  const correlation = queueCorrelation(dagPath);
+  correlation.sourceDagPath = dagPath;
+  let item;
+  let created = false;
   withQueueLock(queuePath, (queue) => {
+    const existing = queue.items.find((entry) => queueItemCorrelationMatches(entry, correlation));
+    if (existing) {
+      item = { ...existing };
+      return;
+    }
+
+    const id = queueItemId(dagPath);
+    const execution = createExecutionSnapshot({ dagPath, queuePath, itemId: id });
+    item = {
+      id,
+      dagPath,
+      sourceDagPath: dagPath,
+      source: correlation.source,
+      sourceKey: correlation.sourceKey,
+      sourceRevision: correlation.sourceRevision,
+      correlationKey: correlation.correlationKey,
+      ...execution,
+      repoRoot: String(repoRootProbe.stdout || '').trim(),
+      args: userArgs,
+      allowDirtyRepo,
+      createPr,
+      priority: validatePriority(priority),
+      status: 'queued',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      attempts: 0,
+    };
     queue.items.push(item);
+    created = true;
   });
 
+  if (json) {
+    console.log(JSON.stringify({ queueId: item.id, created, item }));
+    return 0;
+  }
   console.log(`queued: ${item.id}`);
   console.log(`dagPath: ${item.dagPath}`);
   console.log(`priority: ${item.priority}`);
@@ -611,7 +712,8 @@ function markQueueItemSupervisor({ queuePath, itemId, supervisorPid }) {
 }
 
 function queueCompletionPatch(item, result) {
-  const checkpointPath = resolvePaths(item.dagPath).checkpointPath;
+  const executionDagPath = item.executionDagPath || item.dagPath;
+  const checkpointPath = item.checkpointPath || resolvePaths(executionDagPath).checkpointPath;
   if (result.code === 0) {
     return {
       status: 'completed',
@@ -625,7 +727,7 @@ function queueCompletionPatch(item, result) {
       status: 'paused',
       lastExitCode: 2,
       checkpointPath,
-      reason: latestPause(item.dagPath).reason || 'dag paused',
+      reason: latestPause(executionDagPath).reason || 'dag paused',
     };
   }
   if (result.code === 3) {
@@ -675,7 +777,7 @@ async function runQueueWorker({ queuePath }) {
     const childArgs = [__filename];
     if (item.allowDirtyRepo) childArgs.push('--allow-dirty-repo');
     if (item.createPr === false) childArgs.push('--no-create-pr');
-    childArgs.push(item.dagPath, ...(item.args || []));
+    childArgs.push(item.executionDagPath || item.dagPath, ...(item.args || []));
     console.error(`[loom-supervisor] queue item=${item.id} node ${childArgs.join(' ')}`);
 
     const result = await new Promise((resolve) => {
@@ -1580,6 +1682,7 @@ async function main(argv) {
       priority: flags.priority,
       allowDirtyRepo: flags.allowDirtyRepo,
       createPr: flags.createPr,
+      json: flags.json,
     });
   }
   if (flags.queuePause) return updateQueueItemStatus({ queuePath, itemId: dagArg, nextStatus: 'paused' });
