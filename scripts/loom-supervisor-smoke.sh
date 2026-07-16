@@ -66,6 +66,24 @@ queue_item_get() {
   ' "$1" "$2" "$3"
 }
 
+set_dag_correlation() {
+  node -e '
+    const fs = require("fs");
+    const [dagPath, title, revision] = process.argv.slice(1);
+    const dag = JSON.parse(fs.readFileSync(dagPath, "utf8"));
+    dag.meta.source.title = title;
+    dag.meta.proposalRevision = revision;
+    fs.writeFileSync(dagPath, JSON.stringify(dag, null, 2) + "\n");
+  ' "$1" "$2" "$3"
+}
+
+json_queue_id() {
+  node -e '
+    const fs = require("fs");
+    process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).queueId);
+  ' "$1"
+}
+
 write_smoke_dag() {
   local dag="$1"
   node -e '
@@ -629,6 +647,9 @@ QUEUE_STATUS_OUT="${QUEUE_DIR}/status.txt"
 write_smoke_dag "$QUEUE_DAG_LOW"
 write_smoke_dag "$QUEUE_DAG_HIGH"
 write_smoke_dag "$QUEUE_DAG_CANCEL"
+set_dag_correlation "$QUEUE_DAG_LOW" 'Queue low' 'low-r1'
+set_dag_correlation "$QUEUE_DAG_HIGH" 'Queue high' 'high-r1'
+set_dag_correlation "$QUEUE_DAG_CANCEL" 'Queue cancel' 'cancel-r1'
 printf '0\n0\n' >"$QUEUE_PLAN"
 : >"$QUEUE_INV"
 
@@ -636,7 +657,14 @@ env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_D
 env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_DAG_HIGH" --priority=10 --allow-dirty-repo --provider=codex >"$QUEUE_ADD_HIGH_OUT"
 env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_DAG_CANCEL" --priority=5 --allow-dirty-repo --provider=codex >"$QUEUE_ADD_CANCEL_OUT"
 QUEUE_LOW_ID="$(awk '/^queued:/ { print $2 }' "$QUEUE_ADD_LOW_OUT")"
+QUEUE_HIGH_ID="$(awk '/^queued:/ { print $2 }' "$QUEUE_ADD_HIGH_OUT")"
 QUEUE_CANCEL_ID="$(awk '/^queued:/ { print $2 }' "$QUEUE_ADD_CANCEL_OUT")"
+QUEUE_LOW_EXECUTION_DAG="$(queue_item_get "$QUEUE_PATH" "$QUEUE_LOW_ID" executionDagPath)"
+QUEUE_HIGH_EXECUTION_DAG="$(queue_item_get "$QUEUE_PATH" "$QUEUE_HIGH_ID" executionDagPath)"
+assert_file_exists 'queue snapshot: low exists' "$QUEUE_LOW_EXECUTION_DAG"
+assert_file_exists 'queue snapshot: high exists' "$QUEUE_HIGH_EXECUTION_DAG"
+[[ "$QUEUE_LOW_EXECUTION_DAG" != "$QUEUE_HIGH_EXECUTION_DAG" ]] || fail 'queue snapshots: paths must be disjoint'
+pass 'queue snapshots: paths are disjoint'
 
 env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-pause "$QUEUE_LOW_ID" >/dev/null
 assert_eq 'queue pause: status' paused "$(queue_item_get "$QUEUE_PATH" "$QUEUE_LOW_ID" status)"
@@ -660,12 +688,41 @@ env \
 QUEUE_RUN_RC=$?
 set -e
 assert_eq 'queue run: exit' 0 "$QUEUE_RUN_RC"
-assert_contains 'queue run: first dag follows updated priority' "$QUEUE_DAG_LOW" "$QUEUE_INV"
-assert_eq 'queue run: first invocation' "$QUEUE_DAG_LOW" "$(awk 'NR==1 { print $1 }' "$QUEUE_INV")"
+assert_contains 'queue run: first dag follows updated priority' "$QUEUE_LOW_EXECUTION_DAG" "$QUEUE_INV"
+assert_eq 'queue run: first invocation' "$QUEUE_LOW_EXECUTION_DAG" "$(awk 'NR==1 { print $1 }' "$QUEUE_INV")"
 assert_eq 'queue run: low completed' completed "$(queue_item_get "$QUEUE_PATH" "$QUEUE_LOW_ID" status)"
 assert_eq 'queue run: canceled preserved' canceled "$(queue_item_get "$QUEUE_PATH" "$QUEUE_CANCEL_ID" status)"
+assert_file_exists 'queue runtime: low checkpoint' "$(queue_item_get "$QUEUE_PATH" "$QUEUE_LOW_ID" checkpointPath)"
+assert_file_exists 'queue runtime: high checkpoint' "$(queue_item_get "$QUEUE_PATH" "$QUEUE_HIGH_ID" checkpointPath)"
 env LOOM_SUPERVISOR_QUEUE="$QUEUE_PATH" node "$SUPERVISOR" --queue-status >"$QUEUE_STATUS_OUT"
 assert_contains 'queue status: prints queue' "queue: $QUEUE_PATH" "$QUEUE_STATUS_OUT"
+
+QUEUE_IDENTITY_DIR="${TMP_DIR}/queue_identity"
+mkdir -p "$QUEUE_IDENTITY_DIR"
+QUEUE_IDENTITY_PATH="${QUEUE_IDENTITY_DIR}/queue.json"
+QUEUE_IDENTITY_DAG="${QUEUE_IDENTITY_DIR}/definition.json"
+QUEUE_IDENTITY_ADD_1="${QUEUE_IDENTITY_DIR}/add-1.json"
+QUEUE_IDENTITY_ADD_2="${QUEUE_IDENTITY_DIR}/add-2.json"
+QUEUE_IDENTITY_ADD_3="${QUEUE_IDENTITY_DIR}/add-3.json"
+write_smoke_dag "$QUEUE_IDENTITY_DAG"
+set_dag_correlation "$QUEUE_IDENTITY_DAG" 'Stable source item' 'proposal-r1'
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_IDENTITY_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_IDENTITY_DAG" --json >"$QUEUE_IDENTITY_ADD_1"
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_IDENTITY_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_IDENTITY_DAG" --json >"$QUEUE_IDENTITY_ADD_2"
+QUEUE_IDENTITY_ID_1="$(json_queue_id "$QUEUE_IDENTITY_ADD_1")"
+QUEUE_IDENTITY_ID_2="$(json_queue_id "$QUEUE_IDENTITY_ADD_2")"
+assert_eq 'queue identity: repeated source and revision returns one ID' "$QUEUE_IDENTITY_ID_1" "$QUEUE_IDENTITY_ID_2"
+assert_eq 'queue identity: one queued item for repeated source and revision' 1 "$(node -e 'const q=require(process.argv[1]); process.stdout.write(String(q.items.length))' "$QUEUE_IDENTITY_PATH")"
+QUEUE_IDENTITY_SNAPSHOT_1="$(queue_item_get "$QUEUE_IDENTITY_PATH" "$QUEUE_IDENTITY_ID_1" executionDagPath)"
+set_dag_correlation "$QUEUE_IDENTITY_DAG" 'Stable source item' 'proposal-r2'
+env LOOM_SUPERVISOR_QUEUE="$QUEUE_IDENTITY_PATH" node "$SUPERVISOR" --queue-add "$QUEUE_IDENTITY_DAG" --json >"$QUEUE_IDENTITY_ADD_3"
+QUEUE_IDENTITY_ID_3="$(json_queue_id "$QUEUE_IDENTITY_ADD_3")"
+[[ "$QUEUE_IDENTITY_ID_1" != "$QUEUE_IDENTITY_ID_3" ]] || fail 'queue identity: revisions must receive distinct IDs'
+pass 'queue identity: revisions receive distinct IDs'
+QUEUE_IDENTITY_SNAPSHOT_3="$(queue_item_get "$QUEUE_IDENTITY_PATH" "$QUEUE_IDENTITY_ID_3" executionDagPath)"
+[[ "$QUEUE_IDENTITY_SNAPSHOT_1" != "$QUEUE_IDENTITY_SNAPSHOT_3" ]] || fail 'queue identity: runtime paths must be disjoint'
+pass 'queue identity: runtime paths are disjoint'
+assert_contains 'queue identity: first snapshot remains immutable' 'proposal-r1' "$QUEUE_IDENTITY_SNAPSHOT_1"
+assert_contains 'queue identity: second snapshot records its revision' 'proposal-r2' "$QUEUE_IDENTITY_SNAPSHOT_3"
 
 STALE_QUEUE_DIR="${TMP_DIR}/queue_stale_live_supervisor"
 mkdir -p "$STALE_QUEUE_DIR"
