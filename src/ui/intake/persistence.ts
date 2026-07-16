@@ -11,7 +11,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { getInboxPath, readInbox, writeInboxFile } from '../inbox.js';
 import {
   intakePolicySchema,
@@ -23,6 +23,7 @@ import {
 } from './types.js';
 import type { UiInboxItem } from '../types.js';
 import { isPidAlive } from '../../pid.js';
+import { assertContainedArtifactPath } from '../path-safety.js';
 
 const MAX_LOG_BYTES = 64 * 1024;
 const MAX_LOG_LINES = 200;
@@ -65,11 +66,6 @@ export const acquireIntakeJobLease = (projectPath: string, jobId: string): (() =
   } catch {
     return null;
   }
-};
-
-const assertWithinProject = (projectPath: string, path: string): void => {
-  const root = resolve(projectPath) + '/';
-  if (!resolve(path).startsWith(root)) throw new Error('Intake artifact path escapes project');
 };
 
 export const atomicWriteText = (path: string, value: string): void => {
@@ -146,7 +142,7 @@ export const updateIntakeJob = (
 
 export const writePlan = (projectPath: string, itemId: string, markdown: string): string => {
   const path = getPlanPath(projectPath, itemId);
-  assertWithinProject(projectPath, path);
+  assertContainedArtifactPath(projectPath, path);
   atomicWriteText(path, markdown);
   return path;
 };
@@ -154,12 +150,15 @@ export const writePlan = (projectPath: string, itemId: string, markdown: string)
 export const writeCheckpoint = (projectPath: string, checkpoint: UiSequentialCheckpoint): void => {
   const validated = sequentialCheckpointSchema.parse(checkpoint);
   const path = getRunPath(projectPath, checkpoint.id);
-  assertWithinProject(projectPath, path);
+  assertContainedArtifactPath(projectPath, path);
   atomicWriteText(path, JSON.stringify(validated, null, 2) + '\n');
 };
 
-export const readCheckpoint = (projectPath: string, runId: string): UiSequentialCheckpoint =>
-  sequentialCheckpointSchema.parse(JSON.parse(readFileSync(getRunPath(projectPath, runId), 'utf-8')));
+export const readCheckpoint = (projectPath: string, runId: string): UiSequentialCheckpoint => {
+  const path = getRunPath(projectPath, runId);
+  assertContainedArtifactPath(projectPath, path);
+  return sequentialCheckpointSchema.parse(JSON.parse(readFileSync(path, 'utf-8')));
+};
 
 export const listCheckpoints = (projectPath: string): UiSequentialCheckpoint[] => {
   const dir = getRunsDir(projectPath);
@@ -177,13 +176,14 @@ export const listCheckpoints = (projectPath: string): UiSequentialCheckpoint[] =
 
 export const appendRunLog = (projectPath: string, runId: string, line: string): void => {
   const path = getRunLogPath(projectPath, runId);
-  assertWithinProject(projectPath, path);
+  assertContainedArtifactPath(projectPath, path);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, line.replace(/[\r\n]+/g, ' ') + '\n', 'utf-8');
 };
 
 export const readRunLogTail = (projectPath: string, runId: string): string[] => {
   const path = getRunLogPath(projectPath, runId);
+  assertContainedArtifactPath(projectPath, path);
   if (!existsSync(path)) return [];
   const size = statSync(path).size;
   const raw = readFileSync(path);

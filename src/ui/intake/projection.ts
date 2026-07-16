@@ -9,7 +9,7 @@ const dagRunStatus = (status: string): UiDagRunSummary['status'] => {
   return 'queued';
 };
 
-export const listRuns = (projectPath: string): UiRunSummary[] => {
+export const listRuns = (projectPath: string, discoveredDags = discoverDags(projectPath).dags): UiRunSummary[] => {
   const inbox = readInbox(projectPath);
   const items = new Map(inbox.items.map((item) => [item.id, item]));
   const sequential: UiSequentialRunSummary[] = listCheckpoints(projectPath).map((checkpoint) => ({
@@ -27,20 +27,18 @@ export const listRuns = (projectPath: string): UiRunSummary[] => {
     reviewVerdict: checkpoint.reviewVerdict,
     recoveryRequired: checkpoint.recoveryRequired,
   }));
-  const dags: UiDagRunSummary[] = discoverDags(projectPath)
-    .dags.filter((dag) => dag.status !== 'invalid')
-    .map((dag) => ({
-      id: `dag:${dag.path}`,
-      itemId: inbox.items.find((item) => item.linkedDagPath === dag.path)?.id ?? null,
-      title: dag.title,
-      mode: 'dag',
-      status: dagRunStatus(dag.status),
-      createdAt: dag.updatedAt ?? '',
-      updatedAt: dag.updatedAt ?? '',
-      dagPath: dag.path,
-      completedTasks: dag.completedTasks,
-      totalTasks: dag.totalTasks,
-    }));
+  const dags: UiDagRunSummary[] = discoveredDags.map((dag) => ({
+    id: `dag:${dag.path}`,
+    itemId: inbox.items.find((item) => item.linkedDagPath === dag.path)?.id ?? null,
+    title: dag.title,
+    mode: 'dag',
+    status: dagRunStatus(dag.status),
+    createdAt: dag.updatedAt ?? '',
+    updatedAt: dag.updatedAt ?? '',
+    dagPath: dag.path,
+    completedTasks: dag.completedTasks,
+    totalTasks: dag.totalTasks,
+  }));
   return [...sequential, ...dags].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 };
 

@@ -89,7 +89,7 @@ export interface UiInboxFileV2 {
 
 export const sequentialCheckpointSchema = z.object({
   schemaVersion: z.literal(1),
-  id: z.string().min(1),
+  id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'Checkpoint ID must be a safe filename'),
   itemId: z.string().min(1),
   proposalRevision: z.number().int().positive(),
   mode: z.literal('sequential'),

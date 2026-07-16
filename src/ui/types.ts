@@ -46,7 +46,21 @@ export interface UiError {
   message: string;
 }
 
-export type UiDagStatus = 'not-started' | 'running' | 'paused' | 'completed' | 'failed' | 'invalid';
+export type UiDagStatus = 'not-started' | 'running' | 'paused' | 'completed' | 'failed';
+
+export type UiDagView = 'active' | 'history' | 'archived';
+
+export interface UiProject {
+  schemaVersion: 1;
+  slug: string;
+  displayName: string;
+  repoPath: string;
+  registeredAt: string;
+  updatedAt: string;
+  source: 'manifest' | 'legacy-readme';
+  available: boolean;
+  errors: UiError[];
+}
 
 export interface UiDagListItem {
   path: string;
@@ -115,8 +129,23 @@ export interface UiTaskDetail {
 }
 
 export interface UiProjectSummary {
+  slug: string;
+  displayName: string;
   projectPath: string;
   dagCount: number;
+  dagCounts: {
+    active: number;
+    history: number;
+    archived: number;
+    attention: number;
+  };
+  openInboxCount: number;
+  recentActivityAt: string | null;
+  recentRun: {
+    mode: 'dag' | 'sequential';
+    status: string;
+    updatedAt: string;
+  } | null;
   git: UiGitStatus;
   slots: SlotsScan;
   errors: UiError[];

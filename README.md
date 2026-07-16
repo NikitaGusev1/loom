@@ -368,7 +368,13 @@ Stale worktrees from a previous run are force-removed before creating a new one 
 
 ### Local UI
 
-Start the localhost operations console for a project or repository:
+Open Loom Home to see every registered project:
+
+```sh
+dag-executor --ui
+```
+
+Register or refresh a project and open its dashboard directly:
 
 ```sh
 dag-executor --ui --project=/path/to/project
@@ -380,7 +386,11 @@ The command prints its local address, for example:
 DAG UI listening on http://127.0.0.1:51234
 ```
 
-The UI discovers DAG JSON files below the project path, reads their event and state artifacts, shows machine-wide executor slot usage, and stores local todo items in `.dag-executor/ui-inbox.json`.
+Project registration is stored in `${LOOM_ARTIFACTS_DIR:-/Users/nikita/Desktop/repos/dag-executor-artifacts}/projects/<slug>/project.json`. Existing artifact projects with a documented `Target repo:` line in their `README.md` remain visible as legacy entries. The dashboard shows the registered display name as the project identity; the full path is secondary metadata on Loom Home.
+
+Within a project, Loom discovers only validated DAG JSON files, reads their event and state artifacts, shows machine-wide executor slot usage, and stores local todo items in `.dag-executor/ui-inbox.json`. Unrelated JSON such as package, plugin, and marketplace manifests is ignored instead of appearing as invalid DAGs.
+
+The DAG navigation separates work into **Active** (not started, running, paused, or failed), **History** (completed), and **Archived**. Archiving a completed DAG is non-destructive: it records reversible UI metadata under the central project's `runs/ui-dag-archive.json` and does not move, delete, truncate, or rewrite the DAG, event log, state snapshot, plans, inbox links, or run evidence. Restore returns it to History.
 
 Executor monitoring remains read-only. The browser does not directly start, stop, resume, rerun, or reorder executor tasks; edit DAGs; mutate state or event files; or run arbitrary git commands. Approved agent intake uses the controlled Loom runner paths described below.
 
@@ -409,7 +419,7 @@ dag-executor <decomposition.json> [flags]
 | Flag                             | Default                   | Description                                                                                      |
 | -------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
 | `--ui`                           | false                     | Start the localhost operations UI instead of executing a DAG                                     |
-| `--project=<path>`               | current directory         | Project shown and operated on by `--ui`                                                          |
+| `--project=<path>`               | none                      | Register/refresh a project and select it when starting `--ui`; omit it to open Loom Home         |
 | `--port=<port>`                  | ephemeral                 | Localhost port for `--ui` (`0` lets the OS choose)                                               |
 | `--resume`                       | false                     | Resume a paused run from the event log                                                           |
 | `--dry-run`                      | false                     | Print estimated task costs and exit without executing                                            |

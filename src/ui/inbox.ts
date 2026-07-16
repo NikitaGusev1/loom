@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { UiInboxItem, UiInboxStatus } from './types.js';
 import {
   DEFAULT_INTAKE_POLICY,
@@ -13,6 +13,7 @@ import {
   triageResultSchema,
   type UiInboxFileV2,
 } from './intake/types.js';
+import { assertContainedArtifactPath } from './path-safety.js';
 
 export class InboxParseError extends Error {
   path: string;
@@ -106,6 +107,7 @@ const assertInboxFile = (value: unknown): UiInboxFileV2 => {
 };
 
 export const writeInboxFile = (path: string, file: UiInboxFileV2): void => {
+  assertContainedArtifactPath(resolve(dirname(path), '..'), path);
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(file, null, 2) + '\n', 'utf-8');
@@ -114,6 +116,7 @@ export const writeInboxFile = (path: string, file: UiInboxFileV2): void => {
 
 export const readInbox = (projectPath: string): UiInboxFileV2 => {
   const path = getInboxPath(projectPath);
+  assertContainedArtifactPath(projectPath, path);
   if (!existsSync(path)) return { schemaVersion: 2, items: [], jobs: [], policy: DEFAULT_INTAKE_POLICY };
   try {
     return assertInboxFile(JSON.parse(readFileSync(path, 'utf-8')));

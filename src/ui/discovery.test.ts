@@ -112,21 +112,16 @@ describe('discoverDags', () => {
     );
   });
 
-  it('reports invalid JSON and invalid DAGs without throwing', () => {
+  it('silently ignores non-DAG, malformed, and invalid DAG-shaped JSON', () => {
     writeFileSync(join(projectDir, 'bad-json.json'), '{bad');
     writeFileSync(join(projectDir, 'bad-dag.json'), JSON.stringify({ nope: true }));
+    writeFileSync(join(projectDir, 'invalid-dag.json'), JSON.stringify({ meta: {}, tasks: [], executionLayers: [] }));
+    writeFileSync(join(projectDir, 'plugin.json'), JSON.stringify({ name: 'loom', version: '1' }));
 
     const result = discoverDags(projectDir);
 
-    assert.equal(result.dags.length, 2);
-    assert.deepEqual(
-      result.dags.map((dag) => dag.status),
-      ['invalid', 'invalid'],
-    );
-    assert.equal(
-      result.dags.every((dag) => dag.errors.length === 1),
-      true,
-    );
+    assert.deepEqual(result.dags, []);
+    assert.deepEqual(result.errors, []);
   });
 
   it('uses state and event artifacts to derive status and counts', () => {
