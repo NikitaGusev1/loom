@@ -108,11 +108,13 @@ describe('Loom decomposition-before-mode contract', () => {
     const sequential = read('src/ui/intake/sequential-runner.ts');
     const dagPlanner = read('src/ui/intake/dag-planner.ts');
     const service = read('src/ui/intake/service.ts');
+    const server = read('src/ui/server.ts');
 
     assert.match(sequential, /--no-dag --inline/);
     assert.match(dagPlanner, /loom:decompose/);
     assert.match(dagPlanner, /validated DAG/);
-    assert.match(service, /projectId/);
+    assert.match(service, /readonly projectPath: string/);
+    assert.match(server, /intakeServiceFactory\?\.\(project\.repoPath\)/);
     assert.match(service, /intakeStatus:\s*'awaiting-approval'/);
   });
 });
