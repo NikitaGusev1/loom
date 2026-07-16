@@ -171,7 +171,11 @@ export const createUiServer = (options: UiServerOptions = {}): Server => {
   };
 
   const resolveProject = (slug: string): UiProject => {
-    const project = (initialProject?.slug === slug ? initialProject : null) ?? getProject(artifactsRoot, slug);
+    // Prefer the registry on every request.  In particular, do not let the
+    // single-project compatibility option shadow a registered project whose
+    // path or availability has since changed.  The fallback keeps legacy
+    // --project sessions working before a project has been registered.
+    const project = getProject(artifactsRoot, slug) ?? (initialProject?.slug === slug ? initialProject : null);
     if (!project) throw apiError(`Unknown project "${slug}"`, undefined, 404);
     if (!project.available) throw apiError('Project repository is unavailable', project.repoPath, 404);
     return project;

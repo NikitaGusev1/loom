@@ -211,6 +211,58 @@ describe('createUiServer', () => {
     });
   });
 
+  it('keeps selected project inbox and intake queues isolated', async () => {
+    const secondProject = mkdtempSync(join(tmpdir(), 'dag-ui-server-isolated-'));
+    const secondDag = dagJson();
+    secondDag.meta.id = 'other';
+    writeFileSync(join(secondProject, 'other.json'), JSON.stringify(secondDag));
+    const first = registerProject(artifactsDir, projectDir);
+    const second = registerProject(artifactsDir, secondProject);
+    const queuedFor: string[] = [];
+    const server = createUiServer({
+      artifactsRoot: artifactsDir,
+      slotDir,
+      intakeServiceFactory: (projectPath) => ({
+        enqueueTriage: () => queuedFor.push(projectPath),
+        updatePolicy: (policy) => policy,
+        clarify: () => {},
+        approve: async () => {},
+        cancel: async () => {},
+        stop: () => {},
+      }),
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    try {
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const firstInbox = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(first.slug)}/inbox`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ body: 'First project only' }),
+      });
+      const secondInbox = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(second.slug)}/inbox`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ body: 'Second project only' }),
+      });
+      const firstListed = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(first.slug)}/inbox`);
+      const secondListed = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(second.slug)}/inbox`);
+      const firstDags = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(first.slug)}/dags`);
+      const secondDags = await fetchJson(baseUrl, `/api/projects/${encodeURIComponent(second.slug)}/dags`);
+
+      assert.deepEqual(firstListed.json.items.map((item: { body: string }) => item.body), ['First project only']);
+      assert.deepEqual(secondListed.json.items.map((item: { body: string }) => item.body), ['Second project only']);
+      assert.deepEqual(firstDags.json.dags.map((dag: { id: string }) => dag.id), ['work']);
+      assert.deepEqual(secondDags.json.dags.map((dag: { id: string }) => dag.id), ['other']);
+      assert.deepEqual(queuedFor, [first.repoPath, second.repoPath]);
+      assert.notEqual(firstInbox.json.item.id, secondInbox.json.item.id);
+    } finally {
+      await closeServer(server);
+      rmSync(secondProject, { recursive: true, force: true });
+    }
+  });
+
   it('bounds project intake services and stops the idle LRU service on eviction', async () => {
     const secondProject = mkdtempSync(join(tmpdir(), 'dag-ui-server-second-'));
     const first = registerProject(artifactsDir, projectDir);
