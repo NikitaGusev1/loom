@@ -104,7 +104,7 @@ describe('Loom decomposition-before-mode contract', () => {
     });
   }
 
-  it('keeps the UI entry points aligned with the orchestration invariant', () => {
+  it('keeps the project-scoped planning handoff aligned with the orchestration invariant', () => {
     const sequential = read('src/ui/intake/sequential-runner.ts');
     const dagPlanner = read('src/ui/intake/dag-planner.ts');
     const service = read('src/ui/intake/service.ts');
@@ -112,6 +112,7 @@ describe('Loom decomposition-before-mode contract', () => {
     assert.match(sequential, /--no-dag --inline/);
     assert.match(dagPlanner, /loom:decompose/);
     assert.match(dagPlanner, /validated DAG/);
+    assert.match(service, /projectId/);
     assert.match(service, /intakeStatus:\s*'awaiting-approval'/);
   });
 });
