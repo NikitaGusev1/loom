@@ -41,6 +41,8 @@ CKPT=$(echo "$ARGUMENTS" | sed 's/.*--resume-run[= ]*//' | awk '{print $1}')
 
 All checkpoint I/O MUST go through the `dag-checkpoint` helper (dag-executor plugin bin/, on PATH while the plugin is enabled). Never write checkpoint JSON directly. Never echo review bodies, diff output, or full plan text to stdout — ingest only YAML frontmatter fields and exit codes.
 
+If `dag-checkpoint` is unavailable, hard-stop with a missing-helper error. Never search the user's home directory, macOS protected folders, or unrelated repositories to locate it.
+
 ```bash
 # checkpoint helper: dag-checkpoint (dag-executor plugin bin/, on PATH while plugin enabled)
 

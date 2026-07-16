@@ -147,7 +147,7 @@ for a in "$@"; do
   ARG_LINE+=" $(printf '%q' "$a")"
 done
 
-printf '%s\t%s\t%s\t%s\t%s\n' "$KIND" "$CUR_PHASE" "$CUR_STATUS" "$$" "${ARG_LINE# }" >>"$INV_LOG"
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$KIND" "$CUR_PHASE" "$CUR_STATUS" "$$" "${ARG_LINE# }" "$PATH" >>"$INV_LOG"
 
 COUNT="$(awk -F'\t' -v k="$KIND" '$1==k{c++} END{print c+0}' "$INV_LOG")"
 
@@ -296,6 +296,8 @@ scenario_happy_path() {
 
   assert_eq       'codex inv1 phase=validate-plan' 'validate-plan' "$(printf '%s' "$row1" | awk -F'\t' '{print $2}')"
   assert_contains 'codex inv1 invokes the Loom auto-step skill' '$loom:auto-step' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
+  assert_contains 'codex phase PATH includes repo bin' "${PWD}/bin" "$(printf '%s' "$row1" | awk -F'\t' '{print $6}')"
+  assert_contains 'codex prompt forbids home-directory scans' 'never\ scan\ the\ home\ directory' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
   assert_contains 'codex inv1 args have --model gpt-5.6-sol' '--model gpt-5.6-sol' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
   assert_contains 'codex inv1 pins high reasoning' 'model_reasoning_effort' "$(printf '%s' "$row1" | awk -F'\t' '{print $5}')"
 

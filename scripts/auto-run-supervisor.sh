@@ -40,6 +40,10 @@ CODEX_BIN="${CODEX_BIN:-codex}"
 # the needed tools are pre-allowlisted.
 CODEX_PERM_FLAGS="${AUTO_RUN_CODEX_PERM_FLAGS:---dangerously-bypass-approvals-and-sandbox --ephemeral}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+ARTIFACTS_ROOT="${LOOM_ARTIFACTS_DIR:-$(dirname "$REPO_ROOT")/dag-executor-artifacts}"
+# Headless phases rely on the repo-shipped helper. Make it directly
+# discoverable so an agent never needs to search the user's home directory.
+export PATH="${REPO_ROOT}/bin:${PATH}"
 # DAG_EXECUTOR_CMD is an argv array (kept for parity with the env seam below).
 # The DAG_EXECUTOR_BIN env seam keeps command-string semantics (intentional
 # word-split) so task-smoke can stub it with a single path or a multi-word
@@ -293,7 +297,7 @@ run_codex_phase() {
   local logfile="$3"
   local phase_before status_after phase_after prompt model_args=() reasoning_args=()
   phase_before=$(ck_get phase)
-  prompt="\$loom:auto-step --resume-run ${CKPT}"
+  prompt="\$loom:auto-step --resume-run ${CKPT}. Use dag-checkpoint from PATH. Restrict filesystem discovery to ${REPO_ROOT} and ${ARTIFACTS_ROOT}; never scan the home directory or macOS protected folders."
   if [[ -n "$model" && "$model" != "account-default" && "$model" != "default" && "$model" != "codex" ]]; then
     model_args+=(--model "$model")
   fi
